@@ -80,6 +80,8 @@ helpers behind <a class="reference internal" href="#translations.fields.Translat
 <p>If <tt class="docutils literal"><span class="pre">id</span></tt> is not given a new id will be created using
 <tt class="docutils literal"><span class="pre">translations_seq</span></tt>.  Otherwise, the id will be used to add strings to
 an existing translation.</p>
+<p>To increment IDs we use a setting on MySQL. This is to support multiple
+database masters &#8211; it&#8217;s just crazy enough to work! See bug 756242.</p>
 </dd></dl>
 
 </div>

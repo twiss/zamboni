@@ -100,16 +100,6 @@ launchctl load -w ~/Library/LaunchAgents/com.mysql.mysqld.plist</pre>
 If you&#8217;re setting up Rabbit and want to use <tt class="docutils literal"><span class="pre">celeryd</span></tt>, make sure you remove
 that line from your <tt class="docutils literal"><span class="pre">settings_local.py</span></tt>.</p>
 </div>
-<div class="section" id="sphinx">
-<h2>Sphinx<a class="headerlink" href="#sphinx" title="Permalink to this headline">¶</a></h2>
-<p>On OS X the package is called <tt class="docutils literal"><span class="pre">sphinx</span></tt>.  Once you have it installed, run
-these two commands from the zamboni root to get it running:</p>
-<div class="highlight-python"><pre>indexer -c configs/sphinx/sphinx.conf --all
-searchd -c configs/sphinx/sphinx.conf</pre>
-</div>
-<p>There will probably be warnings and lots of verbose output because Sphinx sucks
-like that, but it usually works.</p>
-</div>
 <div class="section" id="elasticsearch">
 <h2>elasticsearch<a class="headerlink" href="#elasticsearch" title="Permalink to this headline">¶</a></h2>
 <p>See <a class="reference internal" href="elasticsearch.html"><em>elasticsearch</em></a> for more instructions.</p>
@@ -191,7 +181,6 @@ able to type &#8220;lessc&#8221;, and have &#8220;lessc: no input files&#8221; r
 <li><a class="reference internal" href="#mysql">MySQL</a></li>
 <li><a class="reference internal" href="#memcached">Memcached</a></li>
 <li><a class="reference internal" href="#rabbitmq-and-celery">RabbitMQ and Celery</a></li>
-<li><a class="reference internal" href="#sphinx">Sphinx</a></li>
 <li><a class="reference internal" href="#elasticsearch">elasticsearch</a></li>
 <li><a class="reference internal" href="#redis">Redis</a></li>
 <li><a class="reference internal" href="#less-css">LESS CSS</a><ul>

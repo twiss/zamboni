@@ -122,21 +122,9 @@ then request review.</p>
 <div class="highlight-python"><pre>POST /en-US/api/apps/validation/</pre>
 </div>
 <p>Body data should contain the manifest in JSON:</p>
-<div class="highlight-python"><div class="highlight"><pre><span class="p">{</span><span class="s">&quot;manifest&quot;</span><span class="p">:</span> <span class="s">&quot;http://test.app.com/manifest&quot;</span><span class="p">}</span>
-</pre></div>
-</div>
-<p>Validations are done async on the marketplace. The call will return immediately
-with a status of 201:</p>
-<div class="highlight-python"><div class="highlight"><pre><span class="p">{</span><span class="s">&quot;id&quot;</span><span class="p">:</span> <span class="s">&quot;123&quot;</span><span class="p">,</span>
- <span class="s">&quot;manifest&quot;</span><span class="p">:</span> <span class="s">&quot;http://foo.com&quot;</span><span class="p">,</span>
- <span class="s">&quot;processed&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">,</span>
- <span class="s">&quot;resource_uri&quot;</span><span class="p">:</span> <span class="s">&quot;/en-US/api/apps/validation/123/&quot;</span><span class="p">,</span>
- <span class="s">&quot;valid&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">,</span>
- <span class="s">&quot;validation&quot;</span><span class="p">:</span> <span class="s">&quot;&quot;</span><span class="p">}</span>
-</pre></div>
-</div>
-<p>To see how it&#8217;s doing, poll for a result using the <cite>resource_uri</cite>:</p>
-<div class="highlight-python"><pre>GET /en-US/api/apps/validation/123/</pre>
+<div class="highlight-python"><pre>{"manifest": "http://test.app.com/manifest"}
+
+GET /en-US/api/apps/validation/123/</pre>
 </div>
 <p>This will return the status of the validation. Validation not processed yet:</p>
 <div class="highlight-python"><div class="highlight"><pre><span class="p">{</span><span class="s">&quot;id&quot;</span><span class="p">:</span> <span class="s">&quot;123&quot;</span><span class="p">,</span>
@@ -168,12 +156,15 @@ with a status of 201:</p>
 <span class="p">}}</span>
 </pre></div>
 </div>
+<p>You can always check the validation later:</p>
+<div class="highlight-python"><pre>GET /en-US/api/apps/validation/123/</pre>
+</div>
 </div>
 <div class="section" id="create">
 <h3>Create<a class="headerlink" href="#create" title="Permalink to this headline">¶</a></h3>
 <p>This API requires authentication and a successfully validated manifest. To
 create an app with your validated manifest:</p>
-<div class="highlight-python"><pre>POST /en-US/api/apps/</pre>
+<div class="highlight-python"><pre>POST /en-US/api/apps/app/</pre>
 </div>
 <p>Body data should contain the manifest id from the validate call and other data
 in JSON:</p>
@@ -209,7 +200,7 @@ the data using the manifest and return values so far:</p>
 <div class="section" id="update">
 <h3>Update<a class="headerlink" href="#update" title="Permalink to this headline">¶</a></h3>
 <p>This API requires authentication and a successfully created app:</p>
-<div class="highlight-python"><pre>PUT /en-US/apps/app/&lt;app id&gt;/</pre>
+<div class="highlight-python"><pre>PUT /en-US/api/apps/app/&lt;app id&gt;/</pre>
 </div>
 <p>The body contains JSON for the data to be posted.</p>
 <p>These are the fields for the creation and update of an app. These will be
@@ -236,17 +227,18 @@ category ids provided from the category api (see below).</li>
  <span class="s">&quot;device_types&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s">&quot;desktop-1&quot;</span><span class="p">],</span>
  <span class="s">&quot;summary&quot;</span><span class="p">:</span> <span class="s">&quot;wat...&quot;</span><span class="p">,</span>
  <span class="s">&quot;support_email&quot;</span><span class="p">:</span> <span class="s">&quot;a@a.com&quot;</span><span class="p">,</span>
- <span class="s">&quot;categories&quot;</span><span class="p">:</span> <span class="p">[</span><span class="il">1L</span><span class="p">,</span> <span class="il">2L</span><span class="p">]</span>
+ <span class="s">&quot;categories&quot;</span><span class="p">:</span> <span class="p">[</span><span class="il">1L</span><span class="p">,</span> <span class="il">2L</span><span class="p">],</span>
+ <span class="s">&quot;previews&quot;</span><span class="p">:</span> <span class="p">[],</span>
  <span class="p">}</span>
 </pre></div>
 </div>
-<p><em>TODO</em>: should screenshot re-ordering be added here.</p>
+<p>Previews will be list of URLs pointing to the screenshot API.</p>
 </div>
 <div class="section" id="status">
 <h3>Status<a class="headerlink" href="#status" title="Permalink to this headline">¶</a></h3>
 <p>This API requires authentication and a successfully created app.</p>
 <p>To view details of an app, including its review status:</p>
-<div class="highlight-python"><pre>GET /api/apps/&lt;slug&gt;</pre>
+<div class="highlight-python"><pre>GET /en-US/api/apps/app/&lt;app id&gt;/</pre>
 </div>
 <p>Returns the status of the app:</p>
 <div class="highlight-python"><pre>{"slug": "your-test-app",
@@ -258,7 +250,7 @@ category ids provided from the category api (see below).</li>
 <h3>Delete<a class="headerlink" href="#delete" title="Permalink to this headline">¶</a></h3>
 <p>This API requires authentication and a successfully created app.</p>
 <p>Deletes an app:</p>
-<div class="highlight-python"><pre>DELETE /api/apps/&lt;slug&gt;</pre>
+<div class="highlight-python"><pre>DELETE /en-US/api/apps/app/&lt;app id&gt;/</pre>
 </div>
 <p>The app will only be hard deleted if it is incomplete. Otherwise it will be
 soft deleted. A soft deleted app will not appear publicly in any listings
@@ -269,34 +261,53 @@ work.</p>
 <div class="section" id="screenshots-or-videos">
 <h3>Screenshots or videos<a class="headerlink" href="#screenshots-or-videos" title="Permalink to this headline">¶</a></h3>
 <p>These can be added as seperate API calls. There are limits in the marketplace
-for what screenshots and videos can be accepted.</p>
-<p><em>TODO</em>: implement this.</p>
+for what screenshots and videos can be accepted. There is a 5MB limit on file
+uploads.</p>
 <div class="section" id="id1">
 <h4>Create<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h4>
 <p>Create a screenshot or video:</p>
-<div class="highlight-python"><pre>PUT /api/apps/&lt;slug&gt;/screenshot</pre>
+<div class="highlight-python"><pre>PUT /en-US/api/apps/preview/?app=&lt;app id&gt;</pre>
 </div>
-<p>The body should contain the screenshot or video to be uploaded.</p>
+<p>The body should contain the screenshot or video to be uploaded in the following
+format:</p>
+<div class="highlight-python"><div class="highlight"><pre><span class="p">{</span><span class="s">&quot;position&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s">&quot;file&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s">&quot;type&quot;</span><span class="p">:</span> <span class="s">&quot;image/jpg&quot;</span><span class="p">,</span> <span class="s">&quot;data&quot;</span><span class="p">:</span> <span class="s">&quot;iVBOR...&quot;</span><span class="p">}}</span>
+</pre></div>
+</div>
+<p>Fields:</p>
+<ul class="simple">
+<li><cite>file</cite>: a dictionary containing two fields:
+* <cite>type</cite>: the content type
+* <cite>data</cite>: base64 encoded string of the preview to be added</li>
+<li><cite>position</cite>: the position of the preview on the app. We show the previews in
+order</li>
+</ul>
 <p>This will return a 201 if the screenshot or video is successfully created. If
 not we&#8217;ll return the reason for the error.</p>
 <p>Returns the screenshot id:</p>
-<div class="highlight-python"><div class="highlight"><pre><span class="p">{</span><span class="s">&quot;id&quot;</span><span class="p">:</span> <span class="s">&quot;12&quot;</span><span class="p">}</span>
+<div class="highlight-python"><div class="highlight"><pre><span class="p">{</span><span class="s">&quot;position&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s">&quot;thumbnail_url&quot;</span><span class="p">:</span> <span class="s">&quot;/img/uploads/...&quot;</span><span class="p">,</span>
+ <span class="s">&quot;image_url&quot;</span><span class="p">:</span> <span class="s">&quot;/img/uploads/...&quot;</span><span class="p">,</span> <span class="s">&quot;filetype&quot;</span><span class="p">:</span> <span class="s">&quot;image/png&quot;</span><span class="p">,</span>
+ <span class="s">&quot;resource_uri&quot;</span><span class="p">:</span> <span class="s">&quot;/en-US/api/apps/preview/1/&quot;</span><span class="p">}</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="get">
+<h4>Get<a class="headerlink" href="#get" title="Permalink to this headline">¶</a></h4>
+<p>Get information about the screenshot or video:</p>
+<div class="highlight-python"><pre>GET /en-US/api/apps/preview/&lt;preview id&gt;/</pre>
+</div>
+<p>Returns:</p>
+<div class="highlight-python"><div class="highlight"><pre><span class="p">{</span><span class="s">&quot;addon&quot;</span><span class="p">:</span> <span class="s">&quot;/en-US/api/apps/app/1/&quot;</span><span class="p">,</span> <span class="s">&quot;id&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s">&quot;position&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+ <span class="s">&quot;thumbnail_url&quot;</span><span class="p">:</span> <span class="s">&quot;/img/uploads/...&quot;</span><span class="p">,</span> <span class="s">&quot;image_url&quot;</span><span class="p">:</span> <span class="s">&quot;/img/uploads/...&quot;</span><span class="p">,</span>
+ <span class="s">&quot;filetype&quot;</span><span class="p">:</span> <span class="s">&quot;image/png&quot;</span><span class="p">,</span> <span class="s">&quot;resource_uri&quot;</span><span class="p">:</span> <span class="s">&quot;/en-US/api/apps/preview/1/&quot;</span><span class="p">}</span>
 </pre></div>
 </div>
 </div>
 <div class="section" id="id2">
-<h4>Update<a class="headerlink" href="#id2" title="Permalink to this headline">¶</a></h4>
-<p>Update a screenshot or video:</p>
-<div class="highlight-python"><pre>POST /api/apps/&lt;slug&gt;/screenshot/&lt;id&gt;</pre>
-</div>
-<p>This will return a 200 if the screenshot or video is succesfully updated.</p>
-</div>
-<div class="section" id="id3">
-<h4>Delete<a class="headerlink" href="#id3" title="Permalink to this headline">¶</a></h4>
+<h4>Delete<a class="headerlink" href="#id2" title="Permalink to this headline">¶</a></h4>
 <p>Delete a screenshot of video:</p>
-<div class="highlight-python"><pre>DELETE /api/apps/&lt;slug&gt;/screenshot/&lt;id&gt;</pre>
+<div class="highlight-python"><pre>DELETE /en-US/api/apps/previe/&lt;preview id&gt;/</pre>
 </div>
-<p>This will return a 200 if the screenshot has been deleted.</p>
+<p>This will return a 204 if the screenshot has been deleted.</p>
 </div>
 </div>
 </div>
@@ -308,7 +319,7 @@ authentication.</p>
 <h3>Categories<a class="headerlink" href="#categories" title="Permalink to this headline">¶</a></h3>
 <p>No authentication required.</p>
 <p>To find a list of categories available on the marketplace:</p>
-<div class="highlight-python"><pre>GET /en-US/api/categories/</pre>
+<div class="highlight-python"><pre>GET /en-US/api/apps/categories/</pre>
 </div>
 <p>Returns the list of categories:</p>
 <div class="highlight-python"><div class="highlight"><pre><span class="p">{</span><span class="s">&quot;meta&quot;</span><span class="p">:</span>
@@ -321,6 +332,32 @@ authentication.</p>
 </pre></div>
 </div>
 <p>Use the <cite>id</cite> of the category in your app updating.</p>
+</div>
+<div class="section" id="search">
+<h3>Search<a class="headerlink" href="#search" title="Permalink to this headline">¶</a></h3>
+<p>No authentication required.</p>
+<p>To find a list of apps in a category on the marketplace:</p>
+<div class="highlight-python"><pre>GET /en-US/api/apps/search/</pre>
+</div>
+<p>Returns a list of the apps sorted by relevance:</p>
+<div class="highlight-python"><pre>{"meta": {},
+ "objects":
+    [{"absolute_url": "http://../en-US/app/marble-run-1/",
+      "premium_type": 3, "slug": "marble-run-1", id="26",
+      "icon_url": "http://../addon_icons/0/26-32.png",
+      "resource_uri": null
+     }
+ ...</pre>
+</div>
+<p>Arguments:</p>
+<ul class="simple">
+<li><cite>cat</cite> (optional): use the category API to find the ids of the categories</li>
+<li><cite>sort</cite> (optional): one of &#8216;downloads&#8217;, &#8216;rating&#8217;, &#8216;price&#8217;, &#8216;created&#8217;</li>
+</ul>
+<p>Example, to specify a category sorted by rating:</p>
+<div class="highlight-python"><pre>GET /en-US/api/apps/search/?cat=1&amp;sort=rating</pre>
+</div>
+<p>Sorting options:</p>
 </div>
 </div>
 </div>
@@ -353,14 +390,15 @@ authentication.</p>
 <li><a class="reference internal" href="#delete">Delete</a></li>
 <li><a class="reference internal" href="#screenshots-or-videos">Screenshots or videos</a><ul>
 <li><a class="reference internal" href="#id1">Create</a></li>
-<li><a class="reference internal" href="#id2">Update</a></li>
-<li><a class="reference internal" href="#id3">Delete</a></li>
+<li><a class="reference internal" href="#get">Get</a></li>
+<li><a class="reference internal" href="#id2">Delete</a></li>
 </ul>
 </li>
 </ul>
 </li>
 <li><a class="reference internal" href="#other-apis">Other APIs</a><ul>
 <li><a class="reference internal" href="#categories">Categories</a></li>
+<li><a class="reference internal" href="#search">Search</a></li>
 </ul>
 </li>
 </ul>
