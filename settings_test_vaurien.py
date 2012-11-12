@@ -21,3 +21,24 @@ GRAPHITE_PORT = 2003
 
 # SMTP 2525 => 25
 EMAIL_PORT = 2525
+
+# REDIS  6380 => 6379
+REDIS_BACKENDS = {'master': 'redis://localhost:6380?socket_timeout=0.5'}
+
+# MEMCACHE 11212 => 11211
+#
+# to be adapted if we have several backends
+default_cache = CACHES.get('default')
+
+values = ('127.0.0.1:11211', '0.0.0.0:11211')
+
+if default_cache is not None:
+    backend = default_cache['BACKEND']
+    if backend in ('django.core.cache.backends.memcached.Memcached',
+                   'memcachepool.cache.UMemcacheCache'):
+        locations = default_cache['LOCATION']
+        if not isinstance(location, (tuple, list)):
+            locations = [locations]
+
+        if locations[0] in values:
+            CACHES['default']['LOCATION'] = '0.0.0.0:11212'
