@@ -37,7 +37,7 @@ if default_cache is not None:
     if backend in ('django.core.cache.backends.memcached.Memcached',
                    'memcachepool.cache.UMemcacheCache'):
         locations = default_cache['LOCATION']
-        if not isinstance(location, (tuple, list)):
+        if not isinstance(locations, (tuple, list)):
             locations = [locations]
 
         if locations[0] in values:
