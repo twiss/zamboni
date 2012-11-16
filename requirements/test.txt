@@ -4,7 +4,7 @@
 
 psutil==0.2.0
 jstestnetlib==0.3
-vaurien==0.2
+vaurien==0.5
 gevent==0.13.8
 greenlet==0.4.0
 statsd-client==1.0.2
