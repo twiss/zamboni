@@ -79,12 +79,12 @@ def validator(upload_id, **kw):
         upload.validation = validation_result
         log.info(u'[FileUpload:%s] Validation complete: %s.' % (upload_id, validation_result))
         upload.save()  # We want to hit the custom save().
-        log.info(u'[FileUpload:%s] Upload saved %s.' % (upload_id,))
+        log.info(u'[FileUpload:%s] Upload saved %s.' % (upload_id, upload))
     except Exception:
         # Store the error with the FileUpload job, then raise
         # it for normal logging.
         tb = traceback.format_exception(*sys.exc_info())
-        log.info(u'[FileUpload:%s] Validation failure. %s' % (tb,))
+        log.info(u'[FileUpload:%s] Validation failure. %s' % (upload_id, tb))
         upload.update(task_error=''.join(tb))
         raise
 
