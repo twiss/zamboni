@@ -79,14 +79,11 @@ def validator(upload_id, **kw):
                 validation_result = json.dumps(dec_validation_result)
 
         upload.validation = validation_result
-        log.info(u'[FileUpload:%s] Validation complete: %s.' % (upload_id, validation_result))
         upload.save()  # We want to hit the custom save().
-        log.info(u'[FileUpload:%s] Upload saved %s.' % (upload_id, upload))
     except Exception:
         # Store the error with the FileUpload job, then raise
         # it for normal logging.
         tb = traceback.format_exception(*sys.exc_info())
-        log.info(u'[FileUpload:%s] Validation failure. %s' % (upload_id, tb))
         upload.update(task_error=''.join(tb))
         raise
 
@@ -396,7 +393,7 @@ def _fetch_manifest(url, upload=None):
 @task
 @write
 def fetch_manifest(url, upload_pk=None, **kw):
-    log.info(u'[1@None] Fetching manifest: %s. (%s)' % (url, upload_pk))
+    log.info(u'[1@None] Fetching manifest: %s.' % url)
     upload = FileUpload.objects.get(pk=upload_pk)
 
     content = _fetch_manifest(url, upload)
