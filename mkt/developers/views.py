@@ -31,7 +31,7 @@ from addons.models import Addon, AddonUser
 from addons.views import BaseFilter
 from amo import messages
 from amo.decorators import (any_permission_required, json_view, login_required,
-                            post_required)
+                            post_required, write)
 from amo.urlresolvers import reverse
 from amo.utils import escape_all
 from devhub.models import AppLog
@@ -611,6 +611,7 @@ def refresh_manifest(request, addon_id, addon, webapp=False):
 
 @post_required
 @json_view
+@write
 def _upload_manifest(request, is_standalone=False):
     form = forms.NewManifestForm(request.POST, is_standalone=is_standalone)
     if (not is_standalone and
