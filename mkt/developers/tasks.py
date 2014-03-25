@@ -394,7 +394,7 @@ def _fetch_manifest(url, upload=None):
 @task
 @write
 def fetch_manifest(url, upload_pk=None, **kw):
-    log.info(u'[1@None] Fetching manifest: %s.' % url)
+    log.info(u'[1@None] Fetching manifest: %s. (%s)' % (url, upload_pk))
     upload = FileUpload.objects.get(pk=upload_pk)
 
     content = _fetch_manifest(url, upload)
