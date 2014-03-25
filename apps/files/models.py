@@ -576,6 +576,7 @@ class FileUpload(amo.models.ModelBase):
         return self.uuid
 
     def save(self, *args, **kw):
+        log.error("FileUpload %s: self.validation is %s" % (self.uuid, self.validation))
         if self.validation:
             try:
                 if json.loads(self.validation)['errors'] == 0:
