@@ -624,8 +624,7 @@ def _upload_manifest(request, is_standalone=False):
                                   'tier': 1}]}}
     if form.is_valid():
         upload = FileUpload.objects.create()
-        log.info('launching fetch_manifest (%s)' % (upload.pk,))
-        upload.save()
+        transaction.commit()
         tasks.fetch_manifest.delay(form.cleaned_data['manifest'], upload.pk)
         if is_standalone:
             return redirect('mkt.developers.standalone_upload_detail',

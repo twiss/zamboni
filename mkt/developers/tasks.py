@@ -13,6 +13,7 @@ from datetime import date
 from django import forms
 from django.conf import settings
 from django.core.files.storage import default_storage as storage
+from django.db import transaction
 from django.utils.http import urlencode
 
 import requests
@@ -44,6 +45,7 @@ CT_URL = (
 
 
 @task
+@transaction.commit_on_success
 @write
 def validator(upload_id, **kw):
     if not settings.VALIDATE_ADDONS:
