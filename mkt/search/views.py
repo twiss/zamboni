@@ -129,10 +129,20 @@ def _filter_search(request, qs, query, filters=None, sorting=None,
         langs = [x.strip() for x in query['languages'].split(',')]
         qs = qs.filter(supported_locales__in=langs)
     if 'sort' in show:
-        sort_by = [sorting[name] for name in query['sort'] if name in sorting]
+        if 'random' in query['sort']:
+            qs = qs.order_by({
+                '_script': {
+                    'script': 'Math.random()',
+                    'type': 'number',
+                    'params': {},
+                    'order': 'asc',
+                }
+            })
+            sort_by = None
+        else:
+            sort_by = [sorting[name] for name in query['sort'] if name in sorting]
 
         # For "Adolescent" regions popularity is global installs + reviews.
-
         if query['sort'] == 'popularity' and region and not region.adolescent:
             # For "Mature" regions popularity becomes installs + reviews
             # from only that region.
