@@ -4,7 +4,7 @@ from django.http import HttpResponse
 
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.generics import GenericAPIView
+from rest_framework.generics import GenericAPIView, ListAPIView
 
 from translations.helpers import truncate
 
@@ -25,7 +25,21 @@ from mkt.search.forms import ApiSearchForm
 from mkt.search.serializers import (ESAppSerializer, RocketbarESAppSerializer,
                                     SuggestionsESAppSerializer)
 from mkt.search.utils import S
+from mkt.webapps.api import AppSerializer
 from mkt.webapps.models import Webapp, WebappIndexer
+
+
+class RecommendationsView(CORSMixin, MarketplaceView, ListAPIView):
+    cors_allowed_methods = ['get']
+    authentication_classes = [RestSharedSecretAuthentication,
+                              RestOAuthAuthentication]
+    permission_classes = [AllowAny]
+    serializer_class = AppSerializer
+    form_class = ApiSearchForm
+
+    def get_queryset(self):
+        # Get recommended app IDs from recommendation API.
+        return Webapp.objects.all()
 
 
 class SearchView(CORSMixin, MarketplaceView, GenericAPIView):
