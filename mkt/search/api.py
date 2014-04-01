@@ -6,6 +6,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.generics import GenericAPIView, ListAPIView
 
+import commonware
+import requests
 from translations.helpers import truncate
 
 import mkt
@@ -29,6 +31,9 @@ from mkt.webapps.api import AppSerializer
 from mkt.webapps.models import Webapp, WebappIndexer
 
 
+log = commonware.log.getLogger('z.search.api')
+
+
 class RecommendationsView(CORSMixin, MarketplaceView, ListAPIView):
     cors_allowed_methods = ['get']
     authentication_classes = [RestSharedSecretAuthentication,
@@ -38,8 +43,20 @@ class RecommendationsView(CORSMixin, MarketplaceView, ListAPIView):
     form_class = ApiSearchForm
 
     def get_queryset(self):
+        app_ids = []
+        if self.request.amo_user is not None:
+            url = 'http://10.22.113.20/api/v2/recommend/21/%s/' % (
+                self.request.amo_user.rec_hash)
+            resp = requests.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                app_ids = data['recommendations']
+            elif resp.status_code == 404:
+                # User not found.
+                log.info('User not found in recommenation system.')
+
         # Get recommended app IDs from recommendation API.
-        return Webapp.objects.all()
+        return Webapp.objects.filter(id__in=app_ids)
 
 
 class SearchView(CORSMixin, MarketplaceView, GenericAPIView):

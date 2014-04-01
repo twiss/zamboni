@@ -13,7 +13,6 @@ from django.conf import settings
 from django.contrib.auth.hashers import BasePasswordHasher, mask_hash
 from django.contrib.auth.models import User as DjangoUser
 from django.core import validators
-from django.core.exceptions import ObjectDoesNotExist
 from django.db import models, transaction
 from django.template import Context, loader
 from django.utils import translation
@@ -528,6 +527,10 @@ class UserProfile(amo.models.OnChangeMixin, amo.models.ModelBase):
         """Remove the given locale for the user."""
         Translation.objects.remove_for(self, locale)
 
+    @property
+    def rec_hash(self):
+        return hashlib.sha256('%s%s' % (str(self.id),
+                                        settings.SECRET_KEY)).hexdigest()
 
 models.signals.pre_save.connect(save_signal, sender=UserProfile,
                                 dispatch_uid='userprofile_translations')
