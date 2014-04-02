@@ -5,6 +5,7 @@ from django.http import HttpResponse
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.generics import GenericAPIView, ListAPIView
+from rest_framework.views import APIView
 
 import commonware
 import requests
@@ -57,6 +58,29 @@ class RecommendationsView(CORSMixin, MarketplaceView, ListAPIView):
 
         # Get recommended app IDs from recommendation API.
         return Webapp.objects.filter(id__in=app_ids)
+
+
+class RecInstalledView(CORSMixin, MarketplaceView, APIView):
+    cors_allowed_methods = ['post']
+    authentication_classes = [RestSharedSecretAuthentication,
+                              RestOAuthAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        user = request.amo_user
+        app_id = request.DATA.get('app_id')
+
+        url = 'http://10.22.113.20/api/v2/user-items/%s/' % user.rec_hash
+        data = {'item_to_acquire': str(app_id)}
+
+        resp = requests.post(url, data=json.dumps(data),
+                             headers={'content-type': 'application/json'})
+        log.info('POSTing to %s with data: %s' % (url, data))
+        if resp.status_code == 200:
+            return Response(resp.json(), status=resp.status_code)
+        else:
+            return Response({'error': resp.content}, status=resp.status_code)
+            log.error(resp.content)
 
 
 class SearchView(CORSMixin, MarketplaceView, GenericAPIView):

@@ -16,11 +16,13 @@ from mkt.developers.urls import dev_api_patterns, payments_api_patterns
 from mkt.features.views import AppFeaturesList
 from mkt.receipts.urls import receipt_api_patterns
 from mkt.reviewers.urls import api_patterns as reviewer_api_patterns
-from mkt.search.api import (FeaturedSearchView, RecommendationsView,
-                            RocketbarView, SearchView, SuggestionsView)
+from mkt.search.api import (FeaturedSearchView, RecInstalledView,
+                            RecommendationsView, RocketbarView, SearchView,
+                            SuggestionsView)
 from mkt.stats.urls import stats_api_patterns, txn_api_patterns
 from mkt.submit.api import PreviewViewSet, StatusViewSet, ValidationViewSet
 from mkt.webapps.api import AppViewSet, PrivacyPolicyViewSet
+
 
 rocketfuel = SimpleRouter()
 rocketfuel.register(r'collections', CollectionViewSet,
@@ -60,6 +62,7 @@ urlpatterns = patterns('',
     url(r'^apps/', include(apps.urls)),
     url(r'^apps/app/', include(subapps.urls)),
     url(r'^apps/recommendations/', RecommendationsView.as_view()),
+    url(r'^apps/rec_installed/', RecInstalledView.as_view()),
     url(r'^apps/search/featured/', FeaturedSearchView.as_view(),
         name='featured-search-api'),
     url(r'^apps/search/suggest/', SuggestionsView.as_view(),
