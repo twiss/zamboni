@@ -1,22 +1,18 @@
-import hashlib
 import json
 
-from django.conf import settings
 from django.http import HttpResponse
-
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import AllowAny
 
 from mkt.account.views import user_relevant_apps
+from mkt.api.base import CORSMixin
 from mkt.api.authentication import (RestAnonymousAuthentication,
                                     RestOAuthAuthentication,
                                     RestSharedSecretAuthentication)
-from mkt.api.base import CORSMixin
-from mkt.search.api import FeaturedSearchView as BaseFeaturedSearchView
-from mkt.search.api import SearchView as BaseSearchView
+from mkt.search.api import (FeaturedSearchView as BaseFeaturedSearchView,
+                            SearchView as BaseSearchView)
 from mkt.search.serializers import SimpleESAppSerializer
-from mkt.webapps.api import AppViewSet as BaseAppViewset
-from mkt.webapps.api import SimpleAppSerializer
+from mkt.webapps.api import SimpleAppSerializer, AppViewSet as BaseAppViewset
 
 
 class FireplaceAppSerializer(SimpleAppSerializer):
@@ -66,11 +62,7 @@ class ConsumerInfoView(CORSMixin, RetrieveAPIView):
             'region': request.REGION.slug
         }
         if request.amo_user:
-            data['user_id'] = request.amo_user.id
-            data['user_hash'] = hashlib.sha256(
-                '%s%s' % (str(request.amo_user.id),
-                          settings.SECRET_KEY)).hexdigest()
-            data['apps'] = user_relevant_apps(request.amo_user)
+          data['apps'] = user_relevant_apps(request.amo_user)
 
         # Return an HttpResponse directly to be as fast as possible.
         return HttpResponse(json.dumps(data),
