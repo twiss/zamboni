@@ -1,4 +1,5 @@
 import json
+from random import shuffle
 
 from django.http import HttpResponse
 
@@ -116,6 +117,10 @@ class SearchView(CORSMixin, MarketplaceView, GenericAPIView):
         qs = self.apply_filters(request, qs, data=form_data,
                                 profile=profile)
         page = self.paginate_queryset(qs.values_dict())
+        obj_list = page.object_list.execute()
+        shuffle(obj_list.objects)
+        page.object_list = obj_list
+
         return self.get_pagination_serializer(page), query
 
     def get(self, request, *args, **kwargs):
