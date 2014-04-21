@@ -12,7 +12,7 @@ from editors.models import RereviewQueue
 from files.models import FileUpload
 from users.models import UserProfile
 
-from mkt.constants.features import APP_FEATURES
+import mkt.constants
 from mkt.site.fixtures import fixture
 from mkt.submit import forms
 from mkt.webapps.models import AppFeatures, Webapp
@@ -23,106 +23,69 @@ class TestNewWebappForm(amo.tests.TestCase):
     def setUp(self):
         self.request = RequestFactory().get('/')
         self.file = FileUpload.objects.create(valid=True)
+        self.platform = mkt.PLATFORM_FXOS
+        self.form_factor = mkt.FORM_MOBILE
 
-    def test_not_free_or_paid(self):
+    def data(self, **kw):
+        d = {
+            'payment': 'free',
+            'app_type': 'hosted',
+            'platform': [self.platform.id],
+            'form_factor': [self.form_factor.id],
+            'upload': self.file.uuid,
+        }
+        d.update(**kw)
+        return d
+
+    def test_missing_fields(self):
         form = forms.NewWebappForm({})
         assert not form.is_valid()
-        eq_(form.ERRORS['none'], form.errors['free_platforms'])
-        eq_(form.ERRORS['none'], form.errors['paid_platforms'])
+        eq_(form.errors['app_type'], [u'This field is required.'])
+        eq_(form.errors['payment'], [u'This field is required.'])
+        eq_(form.errors['form_factor'], [u'This field is required.'])
+        eq_(form.errors['platform'], [u'This field is required.'])
 
-    def test_not_paid(self):
-        form = forms.NewWebappForm({'paid_platforms': ['paid-firefoxos']})
-        assert not form.is_valid()
-        eq_(form.ERRORS['none'], form.errors['free_platforms'])
-        eq_(form.ERRORS['none'], form.errors['paid_platforms'])
-
-    def test_paid(self):
-        self.create_flag('allow-b2g-paid-submission')
-        form = forms.NewWebappForm({'paid_platforms': ['paid-firefoxos'],
-                                    'upload': self.file.uuid},
-                                   request=self.request)
-        assert form.is_valid()
-        eq_(form.get_paid(), amo.ADDON_PREMIUM)
-
-    def test_free(self):
-        self.create_flag('allow-b2g-paid-submission')
-        form = forms.NewWebappForm({'free_platforms': ['free-firefoxos'],
-                                    'upload': self.file.uuid})
-        assert form.is_valid()
-        eq_(form.get_paid(), amo.ADDON_FREE)
+    def test_payment(self):
+        for payment in ('free', 'paid'):
+            form = forms.NewWebappForm(self.data(payment=payment))
+            assert form.is_valid(), form.errors
+            eq_(form.cleaned_data['payment'], payment)
 
     def test_platform(self):
-        self.create_flag('allow-b2g-paid-submission')
-        mappings = (
-            ({'free_platforms': ['free-firefoxos']}, [amo.DEVICE_GAIA]),
-            ({'paid_platforms': ['paid-firefoxos']}, [amo.DEVICE_GAIA]),
-            ({'free_platforms': ['free-firefoxos',
-                                 'free-android-mobile']},
-             [amo.DEVICE_GAIA, amo.DEVICE_MOBILE]),
-            ({'free_platforms': ['free-android-mobile',
-                                 'free-android-tablet']},
-             [amo.DEVICE_MOBILE, amo.DEVICE_TABLET]),
-        )
-        for data, res in mappings:
-            data['upload'] = self.file.uuid
-            form = forms.NewWebappForm(data)
+        self.create_flag('android-packaged')
+        self.create_flag('desktop-packaged')
+        for platform in mkt.PLATFORM_LIST:
+            form = forms.NewWebappForm(self.data(platform=[platform.id]))
             assert form.is_valid(), form.errors
-            self.assertSetEqual(res, form.get_devices())
+            eq_(form.cleaned_data['platform'], [platform])
 
-    def test_both(self):
-        self.create_flag('allow-b2g-paid-submission')
-        form = forms.NewWebappForm({'paid_platforms': ['paid-firefoxos'],
-                                    'free_platforms': ['free-firefoxos']},
-                                   request=self.request)
-        assert not form.is_valid()
-        eq_(form.ERRORS['both'], form.errors['free_platforms'])
-        eq_(form.ERRORS['both'], form.errors['paid_platforms'])
-
-    def test_multiple(self):
-        form = forms.NewWebappForm({'free_platforms': ['free-firefoxos',
-                                                       'free-desktop'],
-                                    'upload': self.file.uuid})
-        assert form.is_valid()
-
-    def test_not_packaged(self):
-        form = forms.NewWebappForm({'free_platforms': ['free-firefoxos'],
-                                    'upload': self.file.uuid})
-        assert form.is_valid(), form.errors
-        assert not form.is_packaged()
-
-    def test_not_packaged_allowed(self):
-        form = forms.NewWebappForm({'free_platforms': ['free-firefoxos'],
-                                    'upload': self.file.uuid})
-        assert form.is_valid(), form.errors
-        assert not form.is_packaged()
+    def test_form_factor(self):
+        self.create_flag('android-packaged')
+        self.create_flag('desktop-packaged')
+        for ff in mkt.FORM_FACTORS:
+            form = forms.NewWebappForm(self.data(form_factor=[ff.id]))
+            assert form.is_valid(), form.errors
+            eq_(form.cleaned_data['form_factor'], [ff])
 
     @mock.patch('mkt.submit.forms.parse_addon',
                 lambda *args: {'version': None})
-    def test_packaged_disallowed_behind_flag(self):
-        for device in ('free-desktop',
-                       'free-android-mobile',
-                       'free-android-tablet'):
-            form = forms.NewWebappForm({'free_platforms': [device],
-                                        'upload': self.file.uuid,
-                                        'packaged': True})
+    def test_packaged_disallowed(self):
+        for platform in (mkt.PLATFORM_DESKTOP, mkt.PLATFORM_ANDROID):
+            form = forms.NewWebappForm(self.data(platform=[platform.id],
+                                                 app_type='packaged'))
             assert not form.is_valid(), form.errors
-            eq_(form.ERRORS['packaged'], form.errors['paid_platforms'])
+            eq_(form.errors['platform'],
+                'Packaged apps are not yet supported for those platforms.')
 
     @mock.patch('mkt.submit.forms.parse_addon',
                 lambda *args: {'version': None})
     def test_packaged_allowed_everywhere(self):
         self.create_flag('android-packaged')
         self.create_flag('desktop-packaged')
-        for device in ('free-firefoxos',
-                       'free-desktop',
-                       'free-android-tablet',
-                       'free-android-mobile'):
-            form = forms.NewWebappForm({'free_platforms': [device],
-                                        'upload': self.file.uuid,
-                                        'packaged': True},
-                                       request=self.request)
+        for platform in mkt.PLATFORM_LIST:
+            form = forms.NewWebappForm(self.data(platform=[platform.id],
+                                                 app_type='packaged'))
             assert form.is_valid(), form.errors
-            assert form.is_packaged()
 
 
 class TestNewWebappVersionForm(amo.tests.TestCase):
@@ -219,13 +182,15 @@ class TestAppFeaturesForm(amo.tests.TestCase):
 
     def test_required_api_fields(self):
         fields = [f.help_text for f in self.form.required_api_fields()]
-        eq_(fields, sorted(f['name'] for f in APP_FEATURES.values()))
+        eq_(fields, sorted(f['name'] for f in
+                           mkt.constants.APP_FEATURES.values()))
 
     def test_required_api_fields_nonascii(self):
         forms.AppFeaturesForm.base_fields['has_apps'].help_text = _(
             u'H\xe9llo')
         fields = [f.help_text for f in self.form.required_api_fields()]
-        eq_(fields, sorted(f['name'] for f in APP_FEATURES.values()))
+        eq_(fields, sorted(f['name'] for f in
+                           mkt.constants.APP_FEATURES.values()))
 
     def test_changes_mark_for_rereview(self):
         self.features.update(has_sms=True)

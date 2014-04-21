@@ -23,19 +23,29 @@ from translations.fields import TransField
 from translations.forms import TranslationFormMixin
 from translations.widgets import TransInput, TransTextarea
 
-from mkt.constants import APP_FEATURES, FREE_PLATFORMS, PAID_PLATFORMS
+import mkt
+from mkt.constants import APP_FEATURES
+from mkt.developers.forms import verify_app_domain
 from mkt.site.forms import AddonChoiceField, APP_PUBLIC_CHOICES
 from mkt.webapps.models import AppFeatures
-from mkt.developers.forms import verify_app_domain
 
 
-def mark_for_rereview(addon, added_devices, removed_devices):
-    msg = _(u'Device(s) changed: {0}').format(', '.join(
-        [_(u'Added {0}').format(unicode(amo.DEVICE_TYPES[d].name))
-         for d in added_devices] +
-        [_(u'Removed {0}').format(unicode(amo.DEVICE_TYPES[d].name))
-         for d in removed_devices]))
-    RereviewQueue.flag(addon, amo.LOG.REREVIEW_DEVICES_ADDED, msg)
+def mark_for_rereview(addon, added_platforms, removed_platforms):
+    msg = _(u'Platform(s) changed: {0}').format(', '.join(
+        [_(u'Added {0}').format(unicode(mkt.PLATFORM_TYPES[p].name))
+         for p in added_platforms] +
+        [_(u'Removed {0}').format(unicode(mkt.PLATFORM_TYPES[p].name))
+         for p in removed_platforms]))
+    RereviewQueue.flag(addon, amo.LOG.REREVIEW_PLATFORMS_ADDED, msg)
+
+
+def mark_for_rereview_form_factors(addon, added, removed):
+    msg = _(u'Form Factor(s) changed: {0}').format(', '.join(
+        [_(u'Added {0}').format(unicode(mkt.FORM_FACTOR_CHOICES[f].name))
+         for f in added] +
+        [_(u'Removed {0}').format(unicode(mkt.FORM_FACTOR_CHOICES[f].name))
+         for f in removed]))
+    RereviewQueue.flag(addon, amo.LOG.REREVIEW_FORM_FACTORS_ADDED, msg)
 
 
 def mark_for_rereview_features_change(addon, added_features, removed_features):
@@ -46,101 +56,99 @@ def mark_for_rereview_features_change(addon, added_features, removed_features):
     RereviewQueue.flag(addon, amo.LOG.REREVIEW_FEATURES_CHANGED, msg)
 
 
-class DeviceTypeForm(happyforms.Form):
-    ERRORS = {
-        'both': _lazy(u'Cannot be free and paid.'),
-        'none': _lazy(u'Please select a device.'),
-        'packaged': _lazy(u'Packaged apps are not yet supported for those '
-                          u'platforms.'),
-    }
+APP_TYPE_CHOICES = [('hosted', 'hosted'), ('packaged', 'packaged')]
+PAYMENT_CHOICES = [('free', 'free'), ('paid', 'paid')]
+PLATFORM_CHOICES = [(p.id, p.slug) for p in mkt.PLATFORM_LIST]
+FORM_FACTOR_CHOICES = [(ff.id, ff.slug) for ff in mkt.FORM_FACTORS]
 
-    free_platforms = forms.MultipleChoiceField(
-        choices=FREE_PLATFORMS(), required=False)
-    paid_platforms = forms.MultipleChoiceField(
-        choices=PAID_PLATFORMS(), required=False)
 
-    def save(self, addon, is_paid):
-        data = self.cleaned_data[
-            'paid_platforms' if is_paid else 'free_platforms']
-        submitted_data = self.get_devices(t.split('-', 1)[1] for t in data)
+class CompatibilityForm(happyforms.Form):
+    """
+    Form that handles app compatibility related options.
 
-        new_types = set(dev.id for dev in submitted_data)
-        old_types = set(amo.DEVICE_TYPES[x.id].id for x in addon.device_types)
+    This is used during app submission and app editing.
 
-        added_devices = new_types - old_types
-        removed_devices = old_types - new_types
+    """
+    app_type = forms.ChoiceField(choices=APP_TYPE_CHOICES)
+    payment = forms.ChoiceField(choices=PAYMENT_CHOICES)
+    form_factor = forms.MultipleChoiceField(choices=FORM_FACTOR_CHOICES)
+    platform = forms.MultipleChoiceField(choices=PLATFORM_CHOICES)
 
-        for d in added_devices:
-            addon.addondevicetype_set.create(device_type=d)
-        for d in removed_devices:
-            addon.addondevicetype_set.filter(device_type=d).delete()
+    def clean_platform(self):
+        return [mkt.PLATFORM_TYPES.get(p)
+                for p in map(int, self.cleaned_data.get('platform'))]
 
-        # Send app to re-review queue if public and new devices are added.
-        if added_devices and addon.status in amo.WEBAPPS_APPROVED_STATUSES:
-            mark_for_rereview(addon, added_devices, removed_devices)
-
-    def _add_error(self, msg):
-        self._errors['free_platforms'] = self._errors['paid_platforms'] = (
-            self.ERRORS[msg])
-
-    def _get_combined(self):
-        devices = (self.cleaned_data.get('free_platforms', []) +
-                   self.cleaned_data.get('paid_platforms', []))
-        return set(d.split('-', 1)[1] for d in devices)
-
-    def _set_packaged_errors(self):
-        """Add packaged-app submission errors for incompatible platforms."""
-        devices = self._get_combined()
-        bad_android = (
-            not waffle.flag_is_active(self.request, 'android-packaged') and
-            ('android-mobile' in devices or 'android-tablet' in devices)
-        )
-        bad_desktop = (
-            not waffle.flag_is_active(self.request, 'desktop-packaged') and
-            'desktop' in devices
-        )
-        if bad_android or bad_desktop:
-            self._errors['free_platforms'] = self._errors['paid_platforms'] = (
-                self.ERRORS['packaged'])
+    def clean_form_factor(self):
+        return [mkt.FORM_FACTOR_CHOICES.get(ff)
+                for ff in map(int, self.cleaned_data.get('form_factor'))]
 
     def clean(self):
-        data = self.cleaned_data
-        paid = data.get('paid_platforms', [])
-        free = data.get('free_platforms', [])
+        data = super(CompatibilityForm, self).clean()
+        if not data:
+            return
 
-        # Check that they didn't select both.
-        if free and paid:
-            self._add_error('both')
-            return data
+        # Add packaged-app submission errors for incompatible platforms.
+        bad_android = (
+            self.is_packaged() and
+            not waffle.flag_is_active(self.request, 'android-packaged') and
+            mkt.PLATFORM_ANDROID in data.get('platform', [])
+        )
+        bad_desktop = (
+            self.is_packaged() and
+            not waffle.flag_is_active(self.request, 'desktop-packaged')
+            and mkt.PLATFORM_DESKTOP in data.get('platform', [])
+        )
+        if bad_android or bad_desktop:
+            self._errors['platform'] = _(
+                u'Packaged apps are not yet supported for those platforms.')
 
-        # Check that they selected one.
-        if not free and not paid:
-            self._add_error('none')
-            return data
+        return data
 
-        return super(DeviceTypeForm, self).clean()
-
-    def get_devices(self, source=None):
-        """Returns a device based on the requested free or paid."""
-        if source is None:
-            source = self._get_combined()
-
-        platforms = {'firefoxos': amo.DEVICE_GAIA,
-                     'desktop': amo.DEVICE_DESKTOP,
-                     'android-mobile': amo.DEVICE_MOBILE,
-                     'android-tablet': amo.DEVICE_TABLET}
-        return map(platforms.get, source)
+    def is_packaged(self):
+        return bool(self.cleaned_data.get('app_type') == 'packaged')
 
     def is_paid(self):
-        return bool(self.cleaned_data.get('paid_platforms', False))
+        return bool(self.cleaned_data.get('payment') == 'paid')
 
     def get_paid(self):
-        """Returns the premium type. Should not be used if the form is used to
-        modify an existing app.
+        """
+        Returns the premium type.
+
+        Should not be used if the form is used to modify an existing app.
 
         """
-
         return amo.ADDON_PREMIUM if self.is_paid() else amo.ADDON_FREE
+
+    def save(self, addon=None):
+
+        # Addon is passed via the submit flow. If not provided, look for it on
+        # `self` which is used on the edit flow. If we can't find it there,
+        # bail out.
+        if not addon:
+            addon = getattr(self, 'addon', None)
+            if not addon:
+                return
+
+        # Update platforms, send to re-review if new platforms added.
+        new = set(p.id for p in self.cleaned_data.get('platform'))
+        old = set(p.id for p in addon.platforms)
+
+        added_platforms = new - old
+        removed_platforms = old - new
+
+        for p in added_platforms:
+            addon.platform_set.create(platform_id=p)
+        addon.platform_set.filter(platform_id__in=removed_platforms).delete()
+
+        # Send app to re-review queue if public and new platforms are added.
+        if added_platforms and addon.status in amo.WEBAPPS_APPROVED_STATUSES:
+            mark_for_rereview(addon, added_platforms, removed_platforms)
+
+        # Update form factors.
+        addon.form_factor_set.all().delete()
+        for ff in self.cleaned_data.get('form_factor'):
+            addon.form_factor_set.safer_get_or_create(
+                form_factor_id=ff.id)
 
 
 class DevAgreementForm(happyforms.Form):
@@ -233,38 +241,15 @@ class NewWebappVersionForm(happyforms.Form):
         return self._is_packaged
 
 
-class NewWebappForm(DeviceTypeForm, NewWebappVersionForm):
+class NewWebappForm(CompatibilityForm, NewWebappVersionForm):
     upload = forms.ModelChoiceField(widget=forms.HiddenInput,
         queryset=FileUpload.objects.filter(valid=True),
         error_messages={'invalid_choice': _lazy(
             u'There was an error with your upload. Please try again.')})
-    packaged = forms.BooleanField(required=False)
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request', None)
         super(NewWebappForm, self).__init__(*args, **kwargs)
-        if 'paid_platforms' in self.fields:
-            self.fields['paid_platforms'].choices = PAID_PLATFORMS(
-                self.request)
-
-    def _add_error(self, msg):
-        self._errors['free_platforms'] = self._errors['paid_platforms'] = (
-            self.ERRORS[msg])
-
-    def clean(self):
-        data = super(NewWebappForm, self).clean()
-        if not data:
-            return
-
-        if self.is_packaged():
-            self._set_packaged_errors()
-            if self._errors.get('free_platforms'):
-                return
-
-        return data
-
-    def is_packaged(self):
-        return self._is_packaged or self.cleaned_data.get('packaged', False)
 
 
 class UpsellForm(happyforms.Form):
@@ -450,8 +435,8 @@ class AppFeaturesForm(happyforms.ModelForm):
 
     def get_tooltip(self, field):
         field_id = field.name.split('_', 1)[1].upper()
-        return (unicode(APP_FEATURES[field_id].get('description') or '') if
-                field_id in APP_FEATURES else None)
+        return (unicode(APP_FEATURES[field_id].get('description') or '')
+                if field_id in APP_FEATURES else None)
 
     def _changed_features(self):
         old_features = defaultdict.fromkeys(self.initial_features, True)

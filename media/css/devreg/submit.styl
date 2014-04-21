@@ -117,40 +117,49 @@ h2 .soon {
         padding-left: 15px;
         width: 25%;
         a.choice, span.unclickable {
-            text-decoration: none;
-            text-align: center;
-            padding: 180px 10px 20px;
             margin-bottom: 0;
             opacity: .9;
+            padding: 180px 10px 20px;
+            text-align: center;
+            text-decoration: none;
+background-position: 50% 25px;
+background-size: contain;
+background-repeat: no-repeat;
 
-            &[data-value$="-firefoxos"] {
-                background: url(../../img/developers/firefox_phone.png) no-repeat 50% 25px;
+            &[id$="-responsive"] {
+                background-image: url(../../img/developers/responsive_disabled.png);
+                &:hover {
+                    background-image: url(../../img/developers/responsive_hover.png);
+                }
+                &.selected {
+                    background-image: url(../../img/developers/responsive.png);
+                }
             }
-            &[data-value$="-desktop"] {
-                background: url(../../img/developers/firefox_logo.png) no-repeat 50% 25px;
+            &[id$="-desktop"] {
+                background-image: url(../../img/developers/desktop_disabled.png);
+                &:hover {
+                    background-image: url(../../img/developers/desktop_hover.png);
+                }
+                &.selected {
+                    background-image: url(../../img/developers/desktop.png);
+                }
             }
-            &[data-value$="-android-mobile"] {
-                background: url(../../img/developers/firefox_android_phone.png) no-repeat 50% 25px;
+            &[id$="-tablet"] {
+                background-image: url(../../img/developers/tablet_disabled.png);
+                &:hover {
+                    background-image: url(../../img/developers/tablet_hover.png);
+                }
+                &.selected {
+                    background-image: url(../../img/developers/tablet.png);
+                }
             }
-            &[data-value$="-android-tablet"] {
-                background: url(../../img/developers/firefox_android_tablet.png) no-repeat 50% 40px;
-            }
-            &.selected,
-            &.selected:hover {
-                background-color: $notice-yellow;
-            }
-            &:hover {
-                background-color: lighten($notice-yellow, 10%);
-            }
-            &:hover,
-            &:active,
-            &.selected {
-                border-color: darken(gold, 5%);
-                opacity: 1;
-
-                .listing-footer {
-                    background: rgba(0,0,0,.1);
-                    border-color: lighten(gold, 5%);
+            &[id$="-mobile"] {
+                background-image: url(../../img/developers/mobile_disabled.png);
+                &:hover {
+                    background-image: url(../../img/developers/mobile_hover.png);
+                }
+                &.selected {
+                    background-image: url(../../img/developers/mobile.png);
                 }
             }
             div {
@@ -162,9 +171,9 @@ h2 .soon {
         }
     }
     .listing-footer {
-        border-radius: 0 0 3px 3px;
         background: $faint-gray;
         border-color: $light-gray;
+        border-radius: 0 0 3px 3px;
         margin: 15px -10px -20px;
         padding: 0 10px 10px;
         text-align: center;
@@ -176,6 +185,21 @@ h2 .soon {
 
 #upload-file.spacer {
     margin-top: 60px;
+}
+
+#upload-platforms {
+    border-top: 1px dotted $shadow-blue;
+    margin-top: 20px;
+    padding-top: 20px;
+
+    label {
+        display: block;
+        padding: 15px;
+        &.disabled {
+            color: #999;
+            cursor: not-allowed;
+        }
+    }
 }
 
 #submit-next-steps {

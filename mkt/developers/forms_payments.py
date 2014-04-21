@@ -11,19 +11,19 @@ import happyforms
 from tower import ugettext as _, ugettext_lazy as _lazy
 
 import amo
-from amo.utils import raise_required
 from addons.models import Addon, AddonUpsell
+from amo.utils import raise_required
 from constants.payments import (PAYMENT_METHOD_ALL, PAYMENT_METHOD_CARD,
                                 PAYMENT_METHOD_OPERATOR)
 from editors.models import RereviewQueue
 from market.models import AddonPremium, Price
 
+import mkt
 from mkt.api.forms import SluggableModelChoiceField
-from mkt.constants import (BANGO_COUNTRIES, BANGO_OUTPAYMENT_CURRENCIES,
-                           FREE_PLATFORMS, PAID_PLATFORMS)
+from mkt.constants import BANGO_COUNTRIES, BANGO_OUTPAYMENT_CURRENCIES
 from mkt.developers.models import AddonPaymentAccount, PaymentAccount
 from mkt.site.forms import AddonChoiceField
-from mkt.submit.forms import DeviceTypeForm
+from mkt.submit.forms import CompatibilityForm
 
 
 log = commonware.log.getLogger('z.devhub')
@@ -43,7 +43,7 @@ def _restore_app_status(app, save=True):
         app.save()
 
 
-class PremiumForm(DeviceTypeForm, happyforms.Form):
+class PremiumForm(CompatibilityForm, happyforms.Form):
     """
     The premium details for an addon, which is unfortunately
     distributed across a few models.
@@ -76,33 +76,32 @@ class PremiumForm(DeviceTypeForm, happyforms.Form):
 
         super(PremiumForm, self).__init__(*args, **kw)
 
-        self.fields['paid_platforms'].choices = PAID_PLATFORMS(self.request,
-                                                               is_packaged)
-        self.fields['free_platforms'].choices = FREE_PLATFORMS(self.request,
-                                                               is_packaged)
+        self.initial['platform'] = [p.id for p in self.addon.platforms]
+        self.initial['form_factor'] = [ff.id for ff in self.addon.form_factors]
+        self.initial['app_type'] = 'packaged' if is_packaged else 'hosted'
+        if self.addon.premium_type in amo.ADDON_PREMIUMS:
+            self.initial['payment'] = 'paid'
+        else:
+            self.initial['payment'] = 'free'
 
         if (self.is_paid() and not self.is_toggling()):
             # Require the price field if the app is premium and
             # we're not toggling from free <-> paid.
             self.fields['price'].required = True
 
-        # Get the list of supported devices and put them in the data.
-        self.device_data = {}
-        supported_devices = [amo.REVERSE_DEVICE_LOOKUP[dev.id] for dev in
-                             self.addon.device_types]
-        self.initial.setdefault('free_platforms', [])
-        self.initial.setdefault('paid_platforms', [])
+        # Get the list of supported platforms and put them in the data.
+        self.platform_data = {}
+        supported_platforms = [p.id for p in self.addon.platforms]
+        self.initial.setdefault('platform', [])
 
-        for platform in set(x[0].split('-', 1)[1] for x in
-                            (FREE_PLATFORMS(self.request, is_packaged) +
-                             PAID_PLATFORMS(self.request, is_packaged))):
-            supported = platform in supported_devices
-            self.device_data['free-%s' % platform] = supported
-            self.device_data['paid-%s' % platform] = supported
+        for platform in mkt.PLATFORM_LIST:
+            supported = platform.id in supported_platforms
+            self.platform_data['free-%s' % platform.slug] = supported
+            self.platform_data['paid-%s' % platform.slug] = supported
+
 
             if supported:
-                self.initial['free_platforms'].append('free-%s' % platform)
-                self.initial['paid_platforms'].append('paid-%s' % platform)
+                self.initial['platform'].append(platform.id)
 
         if not self.initial.get('price'):
             self.initial['price'] = self._initial_price_id()
@@ -178,19 +177,15 @@ class PremiumForm(DeviceTypeForm, happyforms.Form):
         return value if value in ('free', 'paid') else False
 
     def clean(self):
+        cleaned_data = super(PremiumForm, self).clean()
+
         is_toggling = self.is_toggling()
 
-        if self.addon.is_packaged:
-            self._set_packaged_errors()
-            if self._errors.get('free_platforms'):
-                return self.cleaned_data
-
         if not is_toggling:
-            # If a platform wasn't selected, raise an error.
-            if not self.cleaned_data[
-                '%s_platforms' % ('paid' if self.is_paid() else 'free')]:
+            # If a form factor wasn't selected, raise an error.
+            if not cleaned_data.get('form_factor'):
 
-                self._add_error('none')
+                self._errors['form_factor'] = _(u'Please select a form factor.')
 
                 # We want to throw out the user's selections in this case and
                 # not update the <select> element that goes along with this.
@@ -203,7 +198,7 @@ class PremiumForm(DeviceTypeForm, happyforms.Form):
                     paid_platforms=self.initial.get('paid_platforms', []))
                 self.data.update(**platforms)
 
-        return self.cleaned_data
+        return cleaned_data
 
     def clean_price(self):
         price_value = self.cleaned_data.get('price')
@@ -323,7 +318,7 @@ class PremiumForm(DeviceTypeForm, happyforms.Form):
         if not toggle:
             # Save the device compatibility information when we're not
             # toggling.
-            super(PremiumForm, self).save(self.addon, is_paid)
+            super(PremiumForm, self).save(self.addon)
 
         log.info('Saving app payment changes for addon %s.' % self.addon.pk)
         self.addon.save()

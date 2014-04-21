@@ -26,7 +26,6 @@ import amo.tests
 import reviews
 from abuse.models import AbuseReport
 from access.models import Group, GroupUser
-from addons.models import AddonDeviceType
 from amo.helpers import absolutify, urlparams
 from amo.tests import (app_factory, check_links, days_ago, formset, initial,
                        req_factory_factory, user_factory, version_factory)
@@ -489,9 +488,9 @@ class TestAppQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
         ]
         self.check_actions(expected, actions)
 
-    def test_devices(self):
-        AddonDeviceType.objects.create(addon=self.apps[0], device_type=1)
-        AddonDeviceType.objects.create(addon=self.apps[0], device_type=2)
+    def test_platforms(self):
+        self.apps[0].platform_set.create(platform_id=1)
+        self.apps[0].platform_set.create(platform_id=2)
         r = self.client.get(self.url)
         eq_(r.status_code, 200)
         tds = pq(r.content)('#addon-queue tbody')('tr td:nth-of-type(5)')
@@ -1305,21 +1304,19 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
 
     @mock.patch('mkt.webapps.models.Webapp.set_iarc_storefront_data')
     def test_pending_to_public_w_device_overrides(self, storefront_mock):
-        AddonDeviceType.objects.create(addon=self.app,
-                                       device_type=amo.DEVICE_DESKTOP.id)
-        AddonDeviceType.objects.create(addon=self.app,
-                                       device_type=amo.DEVICE_TABLET.id)
+        self.app.platform_set.create(platform_id=mkt.PLATFORM_DESKTOP.id)
+        self.app.platform_set.create(platform_id=mkt.PLATFORM_ANDROID.id)
         eq_(self.app.make_public, amo.PUBLIC_IMMEDIATELY)
-        data = {'action': 'public', 'device_types': '', 'browsers': '',
+        data = {'action': 'public', 'platforms': '', 'browsers': '',
                 'comments': 'something',
-                'device_override': [amo.DEVICE_DESKTOP.id]}
+                'device_override': [mkt.PLATFORM_DESKTOP.id]}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
         app = self.get_app()
         eq_(app.make_public, amo.PUBLIC_WAIT)
         eq_(app.status, amo.STATUS_PUBLIC_WAITING)
-        eq_([o.id for o in app.device_types], [amo.DEVICE_DESKTOP.id])
-        self._check_log(amo.LOG.REVIEW_DEVICE_OVERRIDE)
+        eq_([o.id for o in app.platforms], [mkt.PLATFORM_DESKTOP.id])
+        self._check_log(amo.LOG.REVIEW_PLATFORM_OVERRIDE)
 
         eq_(len(mail.outbox), 1)
         msg = mail.outbox[0]
@@ -1330,21 +1327,19 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
 
     def test_pending_to_reject_w_device_overrides(self):
         # This shouldn't be possible unless there's form hacking.
-        AddonDeviceType.objects.create(addon=self.app,
-                                       device_type=amo.DEVICE_DESKTOP.id)
-        AddonDeviceType.objects.create(addon=self.app,
-                                       device_type=amo.DEVICE_TABLET.id)
+        self.app.platform_set.create(platform_id=mkt.PLATFORM_DESKTOP.id)
+        self.app.platform_set.create(platform_id=mkt.PLATFORM_ANDROID.id)
         eq_(self.app.make_public, amo.PUBLIC_IMMEDIATELY)
-        data = {'action': 'reject', 'device_types': '', 'browsers': '',
+        data = {'action': 'reject', 'platforms': '', 'browsers': '',
                 'comments': 'something',
-                'device_override': [amo.DEVICE_DESKTOP.id]}
+                'device_override': [mkt.PLATFORM_DESKTOP.id]}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
         app = self.get_app()
         eq_(app.make_public, amo.PUBLIC_IMMEDIATELY)
         eq_(app.status, amo.STATUS_REJECTED)
-        eq_(set([o.id for o in app.device_types]),
-            set([amo.DEVICE_DESKTOP.id, amo.DEVICE_TABLET.id]))
+        eq_(set([o.id for o in app.platforms]),
+            set([mkt.PLATFORM_DESKTOP.id, mkt.PLATFORM_ANDROID.id]))
 
         eq_(len(mail.outbox), 1)
         msg = mail.outbox[0]
@@ -1411,7 +1406,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         eq_(update_cached_manifests.delay.call_count, 0)
         eq_(storefront_mock.call_count, 0)
 
-        data = {'action': 'public', 'device_types': '', 'browsers': '',
+        data = {'action': 'public', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
@@ -1534,7 +1529,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
     @mock.patch('mkt.webapps.models.Webapp.set_iarc_storefront_data')
     def test_pending_to_public_no_mozilla_contact(self, storefront_mock):
         self.app.update(mozilla_contact='')
-        data = {'action': 'public', 'device_types': '', 'browsers': '',
+        data = {'action': 'public', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
@@ -1566,7 +1561,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         eq_(index_webapps.delay.call_count, 0)
         eq_(update_cached_manifests.delay.call_count, 0)
 
-        data = {'action': 'public', 'device_types': '', 'browsers': '',
+        data = {'action': 'public', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
@@ -1638,7 +1633,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         eq_(update_cached_manifests.delay.call_count, 0)
         eq_(storefront_mock.call_count, 0)
 
-        data = {'action': 'public', 'device_types': '', 'browsers': '',
+        data = {'action': 'public', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
@@ -1667,7 +1662,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         self.app.current_version.files.update(status=amo.STATUS_PUBLIC)
         new_version = version_factory(addon=self.app)
         new_version.files.all().update(status=amo.STATUS_PENDING)
-        data = {'action': 'reject', 'device_types': '', 'browsers': '',
+        data = {'action': 'reject', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
@@ -1730,7 +1725,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
     def test_escalation_to_public(self, storefront_mock):
         EscalationQueue.objects.create(addon=self.app)
         eq_(self.app.status, amo.STATUS_PENDING)
-        data = {'action': 'public', 'device_types': '', 'browsers': '',
+        data = {'action': 'public', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data, queue='escalated')
@@ -1751,7 +1746,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         EscalationQueue.objects.create(addon=self.app)
         eq_(self.app.status, amo.STATUS_PENDING)
         files = list(self.version.files.values_list('id', flat=True))
-        data = {'action': 'reject', 'device_types': '', 'browsers': '',
+        data = {'action': 'reject', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data, queue='escalated')
@@ -1812,7 +1807,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         RereviewQueue.objects.create(addon=self.app)
         self.app.update(status=amo.STATUS_PUBLIC)
         self.app.latest_version.files.update(status=amo.STATUS_PUBLIC)
-        data = {'action': 'reject', 'device_types': '', 'browsers': '',
+        data = {'action': 'reject', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data, queue='rereview')
@@ -1832,7 +1827,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         RereviewQueue.objects.create(addon=self.app)
         self.app.update(status=amo.STATUS_PUBLIC)
         self.app.latest_version.files.update(status=amo.STATUS_PUBLIC)
-        data = {'action': 'disable', 'device_types': '', 'browsers': '',
+        data = {'action': 'disable', 'platforms': '', 'browsers': '',
                 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data, queue='rereview')
@@ -2950,10 +2945,8 @@ class TestQueueSort(AppReviewerTest):
         self.apps[1].addonuser_set.create(
             user=UserProfile.objects.create(username='illmatic',
                                             email='brandon@roy.com'))
-        self.apps[0].addondevicetype_set.create(
-            device_type=amo.DEVICE_DESKTOP.id)
-        self.apps[1].addondevicetype_set.create(
-            device_type=amo.DEVICE_MOBILE.id)
+        self.apps[0].platform_set.create(platform_id=mkt.PLATFORM_DESKTOP.id)
+        self.apps[1].platform_set.create(platform_id=mkt.PLATFORM_ANDROID.id)
 
         self.url = reverse('reviewers.apps.queue_pending')
 

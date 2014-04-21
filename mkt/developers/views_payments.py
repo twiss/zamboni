@@ -23,9 +23,9 @@ from constants.payments import (PAYMENT_METHOD_ALL, PAYMENT_METHOD_CARD,
                                 PROVIDER_CHOICES)
 from lib.crypto import generate_key
 from lib.pay_server import client
-
 from market.models import Price
-from mkt.constants import DEVICE_LOOKUP, PAID_PLATFORMS
+
+import mkt
 from mkt.developers import forms, forms_payments
 from mkt.developers.decorators import dev_required
 from mkt.developers.models import CantCancel, PaymentAccount, UserInappKey
@@ -34,6 +34,7 @@ from mkt.developers.utils import uri_to_pk
 from mkt.inapp.models import InAppProduct
 from mkt.inapp.serializers import InAppProductForm
 from mkt.webapps.models import Webapp
+
 
 log = commonware.log.getLogger('z.devhub')
 
@@ -123,28 +124,26 @@ def payments(request, addon_id, addon, webapp=False):
     desktop_packaged_enabled = waffle.flag_is_active(request,
                                                      'desktop-packaged')
 
-    # If android payments is not allowed then firefox os must
-    # be 'checked' and android-mobile and android-tablet should not be.
+    # If android payments is not allowed then firefox os must be 'checked' and
+    # android should not be.
     invalid_paid_platform_state = []
 
-    # If isn't packaged or it is packaged and the android-packaged flag is on
-    # then we should check that desktop isn't set to True.
-    if not is_packaged or (is_packaged and desktop_packaged_enabled):
-        invalid_paid_platform_state.append(('desktop', True))
+    # FirefoxOS payments are ok.
+    invalid_paid_platform_state.append(('firefoxos', False))
+
+    # We don't support desktop payments anywhere yet.
+    invalid_paid_platform_state.append(('desktop', True))
 
     if not android_payments_enabled:
         # When android-payments is off...
-        # If isn't packaged or it is packaged and the android-packaged flag is
-        # on then we should check for the state of android-mobile and
-        # android-tablet.
+        # If not packaged or it is packaged and the android-packaged flag is
+        # on then we should check for the state of android.
         if not is_packaged or (is_packaged and android_packaged_enabled):
-            invalid_paid_platform_state += [('android-mobile', True),
-                                            ('android-tablet', True)]
-        invalid_paid_platform_state.append(('firefoxos', False))
+            invalid_paid_platform_state += [('android', True)]
 
     cannot_be_paid = (
         addon.premium_type == amo.ADDON_FREE and
-        any(premium_form.device_data['free-%s' % x] == y
+        any(premium_form.platform_data['free-%s' % x] == y
             for x, y in invalid_paid_platform_state))
 
     try:
@@ -160,18 +159,16 @@ def payments(request, addon_id, addon, webapp=False):
     if tier_zero:
         paid_region_ids_by_slug = tier_zero.region_ids_by_slug()
 
-    platforms = PAID_PLATFORMS(request, is_packaged)
-    paid_platform_names = [unicode(platform[1]) for platform in platforms]
-
     return render(request, 'developers/payments/premium.html',
                   {'addon': addon, 'webapp': webapp, 'premium': addon.premium,
                    'form': premium_form, 'upsell_form': upsell_form,
+                   'free_forms': mkt.FREE_FORMS,
+                   'paid_forms': mkt.PAID_FORMS,
                    'tier_zero_id': tier_zero_id, 'region_form': region_form,
-                   'DEVICE_LOOKUP': DEVICE_LOOKUP,
-                   'is_paid': (addon.premium_type in amo.ADDON_PREMIUMS
-                               or addon.premium_type == amo.ADDON_FREE_INAPP),
+                   'is_paid': (addon.premium_type in amo.ADDON_PREMIUMS or
+                               addon.premium_type == amo.ADDON_FREE_INAPP),
                    'cannot_be_paid': cannot_be_paid,
-                   'paid_platform_names': paid_platform_names,
+                   'platforms': [p.slug for p in addon.platforms],
                    'has_incomplete_status': addon.status == amo.STATUS_NULL,
                    'is_packaged': addon.is_packaged,
                    # Bango values

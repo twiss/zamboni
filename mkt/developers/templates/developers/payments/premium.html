@@ -9,26 +9,13 @@
   {{ super() }}{% if not can_edit %} no-edit{% endif %}
 {% endblock %}
 
-{%- macro button(form, item, can_change=True) -%}
-  {% set tag = 'a' if can_change else 'span' %}
-  <div class="wrapper">
-    <{{ tag }}
-     {{ {'href': '#',
-         'id': item[0],
-         'class': 'island choice' +
-                  (' selected' if form.device_data[item[0]] else '') +
-                  (' unclickable' if not can_change else ''),
-         'data-value': item[0],
-         'title': DEVICE_LOOKUP[item[0]]
-        }|xmlattr }}>
-      <h3>{{ item[1] }}</h3>
-      {%- if can_change -%}
-        <div class="listing-footer">
-          <input type="checkbox" {{ 'checked' if form.device_data[item[0]] }}>
-        </div>
-      {%- endif -%}
-    </{{ tag }}>
-  </div>
+{%- macro button(id, slug, name, extra_class) -%}
+<div class="wrapper">
+  <a href="#" id="{{ slug }}" class="choice island{% if extra_class %} {{ extra_class }}{% endif %}" data-value="{{ id }}" draggable="false">
+    <h3>{{ name }}</h3>
+    <div class="listing-footer"><input type="checkbox"></div>
+  </a>
+</div>
 {%- endmacro %}
 
 {% block content %}
@@ -36,14 +23,18 @@
     {{ hub_breadcrumbs(addon, items=[(None, title)]) }}
     <h1>{{ title }}</h1>
   </header>
-  <section class="primary payments devhub-form" role="main">
+  <section class="primary payments devhub-form" role="main"
+           data-packaged-platforms="{{ 'android' if waffle.flag('android-packaged') }} {{ 'desktop' if waffle.flag('desktop-packaged') }}"
+           data-payment-platforms="{{ 'android' if waffle.flag('android-payments') }}">
     <form action="{{ addon.get_dev_url('payments') }}" method="post">
       {{ csrf() }}
       <input type="hidden" name="toggle-paid" value="" />
 
       <div class="hidden">
-        {{ form.free_platforms }}
-        {{ form.paid_platforms }}
+        {{ form.app_type }}
+        {{ form.payment }}
+        {{ form.platform }}
+        {{ form.form_factor }}
       </div>
 
       <section id="submit-payment-type">
@@ -54,49 +45,34 @@
         <div class="island hasappendix tabbable">
           <div class="free tab {{ 'active' if not is_paid }}">
             <h2 id="free-tab-header"><a href="#">{{ _('Free') }}</a></h2>
-            <div class="error">{{ form.errors.free_platforms }}</div>
-            {% set free_platforms = form.fields['free_platforms'].choices %}
-            {% set has_multiple_free_platforms = free_platforms|length > 1 %}
-            {%- for item in free_platforms -%}
-              {{ button(form, item, can_change=has_multiple_free_platforms and not is_paid) }}
+            <div class="error">{{ form.errors.form_factor }}</div>
+            {{ button(0, 'free-responsive', _('Responsive')) }}
+            {%- for slug, ff in free_forms -%}
+              {{ button(ff.id, 'free-' + ff.slug, ff.name, 'free-choices') }}
             {%- endfor %}
+
             {% if is_paid %}
               <div id="free-tab-save" class="update-payment-type">
                 <button data-type="free">{{ _('Change to Free') }}</button>
                 {{ _('Changing to Free will put your app back into review.') }}
               </div>
-            {% else %}
-              <div id="compat-save-button" class="hidden update-payment-type">
-                <button>{{ _('Save Changes') }}</button>
-              </div>
             {% endif %}
           </div>
 
-          {% set paid_platforms = form.fields['paid_platforms'].choices %}
-          {% set has_multiple_paid_platforms = paid_platforms|length > 1 %}
           <div class="paid tab {{ 'active' if is_paid }}">
             <h2 id="paid-tab-header">
-              {%- if cannot_be_paid -%}
-                <a href="#"
-                     class="tooltip disabled"
-                     title="{{ _('Paid mode requires that your app only supports:') }} {{ paid_platform_names|join(', ') }}"
-                  >{{ _('Paid / In-app') }}</a>
-              {%- else -%}
-                <a href="#">{{ _('Paid / In-app') }}</a>
-              {%- endif -%}
+              <a href="#"{% if cannot_be_paid %} class="disabled"{% endif %}>{{ _('Paid / In-app') }}</a>
             </h2>
-            <div class="error">{{ form.errors.paid_platforms }}</div>
-            {%- for item in paid_platforms -%}
-              {{ button(form, item, can_change=has_multiple_paid_platforms and is_paid) }}
+            <div class="error"></div>
+            {{ button(0, 'paid-responsive', _('Responsive')) }}
+            {%- for slug, ff in paid_forms -%}
+              {{ button(ff.id, 'paid-' + ff.slug, ff.name, 'paid-choices') }}
             {%- endfor %}
+
             {% if not is_paid and not cannot_be_paid %}
               <div id="paid-tab-save" class="update-payment-type">
                 <button data-type="paid">{{ _('Change to Paid') }}</button>
                 {{ _('Changing to Paid will put your app back into review.') }}
-              </div>
-            {% else %}
-              <div id="compat-save-button" class="hidden update-payment-type">
-                <button>{{ _('Save Changes') }}</button>
               </div>
             {% endif %}
             <div class="helpful-links">
@@ -106,6 +82,19 @@
                Learn about <a href="{{ receipts_url }}" target="_blank">validating purchase receipts</a>.
               {% endtrans %}
             </div>
+          </div>
+
+          <div id="upload-platforms">
+            <h3>{{ _('Additional Platforms') }}</h3>
+            <p>{{ _('In addition to Firefox devices I would also like my app listed '
+                    'in the Marketplace for users of:') }}</p>
+            <label>
+              <input type="checkbox" id="platform-android" {% if 'android' in platforms %} checked="checked"{% endif %}> {{ _('Android') }}
+            </label>
+          </div>
+
+          <div id="compat-save-button" class="update-payment-type hidden">
+            <button class="button">{{ _('Save Changes') }}</button>
           </div>
         </div>
       </section>

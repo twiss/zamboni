@@ -22,8 +22,8 @@ from nose.tools import assert_not_equal, eq_, ok_, raises
 import amo
 import amo.tests
 from addons.models import (Addon, AddonCategory, AddonDependency,
-                           AddonDeviceType, AddonRecommendation, AddonType,
-                           AddonUpsell, AddonUser, AppSupport, BlacklistedGuid,
+                           AddonRecommendation, AddonType, AddonUpsell,
+                           AddonUser, AppSupport, BlacklistedGuid,
                            BlacklistedSlug, Category, Charity, CompatOverride,
                            CompatOverrideRange, FrozenAddon,
                            IncompatibleVersions, Persona, Preview)
@@ -32,7 +32,6 @@ from amo import set_user
 from amo.helpers import absolutify
 from amo.signals import _connect, _disconnect
 from applications.models import Application, AppVersion
-from constants.applications import DEVICE_TYPES
 from devhub.models import ActivityLog, AddonLog, RssKey, SubmitStep
 from editors.models import EscalationQueue
 from files.models import File, Platform
@@ -1465,8 +1464,6 @@ class TestAddonDelete(amo.tests.TestCase):
             category=Category.objects.create(type=amo.ADDON_EXTENSION))
         AddonDependency.objects.create(addon=addon,
             dependent_addon=addon)
-        AddonDeviceType.objects.create(addon=addon,
-            device_type=DEVICE_TYPES.keys()[0])
         AddonRecommendation.objects.create(addon=addon,
             other_addon=addon, score=0)
         AddonUpsell.objects.create(free=addon, premium=addon)

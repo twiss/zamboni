@@ -8,15 +8,13 @@
 
 {% block title %}{{ hub_page_title(title) }}{% endblock %}
 
-{%- macro button(form, item) -%}
-  <div class="wrapper">
-    <a href="#" class="island choice{{ ' selected' if form.data[item[0]] == 'on' }}"
-       id="{{ item[0] }}" data-value="{{ item[0] }}">
-      <h3>{{ item[1] }}</h3>
-      <div>{{ DEVICE_LOOKUP[item[0]] }}</div>
-      <div class="listing-footer"><input type="checkbox"></div>
-    </a>
-  </div>
+{%- macro button(id, slug, name, extra_class) -%}
+<div class="wrapper">
+  <a href="#" id="{{ slug }}" class="choice island{% if extra_class %} {{ extra_class }}{% endif %}" data-value="{{ id }}" draggable="false">
+    <h3>{{ name }}</h3>
+    <div class="listing-footer"><input type="checkbox"></div>
+  </a>
+</div>
 {%- endmacro %}
 
 {% block content %}
@@ -30,28 +28,39 @@
     <div class="free tab active">
       {% if waffle.flag('allow-b2g-paid-submission') %}
         <h2 id="free-tab-header"><a href="#">{{ _('Free') }}</a></h2>
-      {% else %}
-        <h2>{{ _('Device Type') }}</h2>
       {% endif %}
-      <div class="error">{{ form.errors.free_platforms }}</div>
-      {%- for item in form.fields['free_platforms'].choices -%}
-        {{ button(form, item) }}
+      <div class="error"></div>
+      {{ button(0, 'free-responsive', _('Responsive')) }}
+      {%- for slug, ff in free_forms -%}
+        {{ button(ff.id, 'free-' + ff.slug, ff.name, 'free-choices') }}
       {%- endfor %}
     </div>
 
     {% if waffle.flag('allow-b2g-paid-submission') %}
       <div class="paid tab">
         <h2 id="paid-tab-header"><a href="#">{{ _('Paid / In-app') }}</a></h2>
-        <div class="error">{{ form.errors.paid_platforms }}</div>
-        {%- for item in form.fields['paid_platforms'].choices -%}
-          {{ button(form, item) }}
+        <div class="error"></div>
+        {{ button(0, 'paid-responsive', _('Responsive')) }}
+        {%- for slug, ff in paid_forms -%}
+          {{ button(ff.id, 'paid-' + ff.slug, ff.name, 'paid-choices') }}
         {%- endfor %}
       </div>
     {% endif %}
+
+    <div id="upload-platforms">
+      <h3>{{ _('Additional Platforms') }}</h3>
+      <p>{{ _('In addition to Firefox devices I would also like my app listed
+               in the Marketplace for users of:') }}</p>
+      <label>
+        <input type="checkbox" id="platform-android"> {{ _('Android') }}
+      </label>
+    </div>
+
   </section>
 
   <section id="upload-file" class="island tabbable spacer"
-           data-packaged-platforms="{{ 'android' if waffle.flag('android-packaged') }} {{ 'desktop' if waffle.flag('desktop-packaged') }}">
+           data-packaged-platforms="{{ 'android' if waffle.flag('android-packaged') }} {{ 'desktop' if waffle.flag('desktop-packaged') }}"
+           data-payment-platforms="{{ 'android' if waffle.flag('android-payments') }}">
     <div class="hosted tab active">
       <h2 id="hosted-tab-header"><a href="#">{{ _('Hosted') }}</a></h2>
       <h3>{{ _("Submit your app manifest URL") }}</h3>
@@ -63,7 +72,7 @@
                      placeholder="http://" data-upload-url="{{ url('mkt.developers.upload_manifest') }}">
             </div>
             <div class="vf-button">
-              <button type="submit" class="disabled" id="validate_app">{{ _('Validate') }}</button>
+              <button type="submit" id="validate_app" class="disabled">{{ _('Validate') }}</button>
             </div>
           </form>
         </label>
@@ -99,9 +108,10 @@
       -->
       <div class="hidden">
         {{ form.upload }}
-        {{ form.free_platforms }}
-        {{ form.paid_platforms }}
-        {{ form.packaged }}
+        {{ form.app_type }}
+        {{ form.payment }}
+        {{ form.platform }}
+        {{ form.form_factor }}
       </div>
 
       <div id="upload-webapp-features">
