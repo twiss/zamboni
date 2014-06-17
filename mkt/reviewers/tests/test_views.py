@@ -34,6 +34,7 @@ from lib.crypto import packaged
 from lib.crypto.tests import mock_sign
 from mkt.abuse.models import AbuseReport
 from mkt.access.models import Group, GroupUser
+from mkt.api.tests.test_oauth import RestOAuth
 from mkt.comm.utils import create_comm_note
 from mkt.constants import comm
 from mkt.constants.features import FeatureProfile
@@ -3316,10 +3317,30 @@ class TestReviewPage(amo.tests.TestCase):
         eq_(doc('.reviewers-mobile .content-rating').length, 2)
 
 
-class TestReviewTranslate(AppReviewerTest):
+class TestAbusePage(AppReviewerTest):
+    fixtures = fixture('group_editor', 'user_editor', 'user_editor_group')
 
     def setUp(self):
+        self.app = app_factory(name = u'My app é <script>alert(5)</script>')
+        self.url = reverse('reviewers.apps.review.abuse',
+                           args=[self.app.app_slug])
+        AbuseReport.objects.create(addon=self.app, message=self.app.name)
         self.login_as_editor()
+
+    def testXSS(self):
+        from django.utils.encoding import smart_unicode
+        from jinja2.utils import escape
+        content = smart_unicode(self.client.get(self.url).content)
+        ok_(not unicode(self.app.name) in content)
+        ok_(unicode(escape(self.app.name)) in content)
+
+
+class TestReviewTranslate(RestOAuth):
+    fixtures = ['base/users']
+
+    def setUp(self):
+        self.profile = self.user = UserProfile.objects.get(email='editor@mozilla.com')
+        self.login_user()
         self.create_switch('reviews-translate')
         user = UserProfile.objects.create(username='diego')
         app = amo.tests.app_factory(slug='myapp')
@@ -3349,9 +3370,9 @@ class TestReviewTranslate(AppReviewerTest):
 
         # Call translation.
         review = self.review
-        res = self.client.get_ajax(reverse('reviewers.review_translate',
-                                           args=[review.addon.slug, review.id,
-                                                 'fr']),)
+        url = reverse('reviewers.review_translate',
+                      args=[review.addon.slug, review.id, 'fr'])
+        res = self.client.get(url, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
         eq_(res.status_code, 200)
         eq_(res.content, '{"body": "oui", "title": "oui"}')
 
