@@ -1,10 +1,12 @@
 {
-    "order": ["stdlib", "django", "3rd", "local", "relative"],
+    "order": ["future", "stdlib", "django", "3rd", "local", "relative"],
     "fallback": "local",
     "from_order": {
         "local": false
     },
     "modules": {
+        "future": ["__future__"],
+
         "stdlib": [
             "BaseHTTPServer", "ConfigParser", "Cookie", "EasyDialogs",
             "HTMLParser", "Queue", "SimpleXMLRPCServer", "SocketServer",
@@ -58,17 +60,17 @@
             "mimeparse", "mock", "monolith", "mozilla_logger", "mozpay",
             "multidb", "mysql_pool", "mysql_pool", "mysqlmysql", "ndg", "nose",
             "nose", "oauth2", "oauth2client", "oauthlib", "ordereddict",
-            "packager", "paramiko", "pep8", "phpserialize", "picklefield",
-            "piston", "polib", "product_details", "py", "pyasn1",
-            "pyelasticsearch", "pyes", "pyflakes", "pygments", "pymemcache",
-            "pymysql", "pyquery", "pytz", "queryset_transform",
+            "path", "packager", "paramiko", "pep8", "phpserialize",
+            "picklefield", "piston", "polib", "product_details", "py",
+            "pyasn1", "pyelasticsearch", "pyes", "pyflakes", "pygments",
+            "pymemcache", "pymysql", "pyquery", "pytz", "queryset_transform",
             "quieter_formset", "ratelimit", "raven", "rdflib", "recaptcha",
             "receipts", "redis", "redis", "redisutils", "requests",
             "rest_framework", "rest_framework", "see", "session_csrf", "share",
             "simplejson", "six", "slumber", "sphinx", "sphinxcontrib",
             "sqlalchemy", "sqlparse", "statsd", "storages", "suds", "tastypie",
             "tastypie_services", "test_utils", "tests", "tower", "tox",
-            "translate", "uritemplate", "validator", "virtualenv",
+            "translate", "uritemplate", "uuidfield", "validator", "virtualenv",
             "virtualenv_support", "waffle"],
 
         "relative" : ["acl", "authorization", "decorators", "filters",

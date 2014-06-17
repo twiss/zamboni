@@ -30,7 +30,6 @@ from amo.helpers import absolutify, urlparams
 from amo.tests import (app_factory, check_links, days_ago, formset, initial,
                        req_factory_factory, user_factory, version_factory)
 from amo.utils import isotime
-from files.models import File
 from lib.crypto import packaged
 from lib.crypto.tests import mock_sign
 from mkt.abuse.models import AbuseReport
@@ -39,6 +38,7 @@ from mkt.comm.utils import create_comm_note
 from mkt.constants import comm
 from mkt.constants.features import FeatureProfile
 from mkt.developers.models import ActivityLog, ActivityLogAttachment, AppLog
+from mkt.files.models import File
 from mkt.ratings.models import Review, ReviewFlag
 from mkt.reviewers.models import (CannedResponse, EscalationQueue,
                                   RereviewQueue, ReviewerScore)
@@ -47,11 +47,11 @@ from mkt.reviewers.views import (_do_sort, _progress, app_review, queue_apps,
 from mkt.site.fixtures import fixture
 from mkt.submit.tests.test_views import BasePackagedAppTest
 from mkt.tags.models import Tag
+from mkt.users.models import UserProfile
 from mkt.versions.models import Version
 from mkt.webapps.models import AddonDeviceType, Webapp
 from mkt.webapps.tests.test_models import PackagedFilesMixin
 from mkt.zadmin.models import get_config, set_config
-from mkt.users.models import UserProfile
 
 
 TEST_PATH = path.dirname(path.abspath(__file__))
@@ -2177,17 +2177,13 @@ class TestCannedResponses(AppReviewerTest):
     def setUp(self):
         super(TestCannedResponses, self).setUp()
         self.login_as_editor()
-        self.app = app_factory(name='XXX',
-                               status=amo.STATUS_PENDING)
-        self.cr_addon = CannedResponse.objects.create(
-            name=u'addon reason', response=u'addon reason body',
-            sort_group=u'public', type=amo.CANNED_RESPONSE_ADDON)
-        self.cr_app = CannedResponse.objects.create(
+        self.app = app_factory(name='XXX', status=amo.STATUS_PENDING)
+        self.cr = CannedResponse.objects.create(
             name=u'app reason', response=u'app reason body',
-            sort_group=u'public', type=amo.CANNED_RESPONSE_APP)
+            sort_group=u'public')
         self.url = reverse('reviewers.apps.review', args=[self.app.app_slug])
 
-    def test_no_addon(self):
+    def test_ok(self):
         r = self.client.get(self.url)
         eq_(r.status_code, 200)
         form = r.context['form']
@@ -2198,12 +2194,10 @@ class TestCannedResponses(AppReviewerTest):
         # So above, choices[1][1] gets the first real group's list of
         # responses.
         eq_(len(choices), 1)
-        assert self.cr_app.response in choices[0]
-        assert self.cr_addon.response not in choices[0]
+        assert self.cr.response in choices[0]
 
 
 class TestReviewLog(AppReviewerTest, AccessMixin):
-
     fixtures = AppReviewerTest.fixtures + fixture('user_admin')
 
     def setUp(self):

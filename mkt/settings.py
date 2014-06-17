@@ -86,12 +86,11 @@ INSTALLED_APPS = (
     'amo',  # amo comes first so it always takes precedence.
     'cronjobs',
     'csp',
-    'files',
     'jingo_minify',
     'lib.es',
     'product_details',
     'tower',  # for ./manage.py extract
-    'translations',
+    'mkt.translations',
 
     # Third party apps
     'djcelery',
@@ -820,7 +819,8 @@ def JINJA_CONFIG():
     import jinja2
     from django.conf import settings
     from django.core.cache import cache
-    config = {'extensions': ['tower.template.i18n', 'amo.ext.cache',
+    config = {'extensions': ['tower.template.i18n',
+                             'caching.ext.FragmentCacheExtension',
                              'jinja2.ext.do',
                              'jinja2.ext.with_', 'jinja2.ext.loopcontrols'],
               'finalize': lambda x: x if x is not None else ''}
@@ -1109,7 +1109,7 @@ TASK_USER_ID = 1
 # These apps are only needed in a testing environment. They are added to
 # INSTALLED_APPS by the RadicalTestSuiteRunnerWithExtraApps test runner.
 TEST_INSTALLED_APPS = (
-    'translations.tests.testapp',
+    'mkt.translations.tests.testapp',
 )
 
 # Tests

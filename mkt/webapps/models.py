@@ -16,7 +16,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.files.storage import default_storage as storage
 from django.core.urlresolvers import NoReverseMatch, reverse
 from django.db import models, transaction
-from django.db.models import signals as dbsignals, Max, Min, Q
+from django.db.models import signals as dbsignals, Max, Q
 from django.dispatch import receiver
 from django.utils.translation import trans_real as translation
 
@@ -25,12 +25,13 @@ import commonware.log
 import json_field
 import waffle
 from cache_nuggets.lib import memoize, memoize_key
-from elasticutils.contrib.django import F, Indexable, MappingType
+from elasticutils.contrib.django import F
 from jinja2.filters import do_dictsort
 from tower import ugettext as _, ugettext_lazy as _lazy
 
 import amo
 import amo.models
+import mkt
 from amo.decorators import skip_cache, use_master, write
 from amo.helpers import absolutify
 from amo.storage_utils import copy_stored_file
@@ -38,32 +39,26 @@ from amo.urlresolvers import get_outgoing_url
 from amo.utils import (attach_trans_dict, find_language, JSONEncoder, send_mail,
                        slugify, smart_path, sorted_groupby, timer, to_language,
                        urlparams)
-from amo.decorators import skip_cache, write
-from amo.helpers import absolutify
-from amo.storage_utils import copy_stored_file
-from amo.utils import JSONEncoder, smart_path, urlparams
-from constants.applications import DEVICE_GAIA, DEVICE_TYPES
+from constants.applications import DEVICE_TYPES
 from constants.payments import PROVIDER_CHOICES
-from files.models import File, nfd_str, Platform
-from files.utils import parse_addon, WebAppParser
 from lib.crypto import packaged
 from lib.iarc.client import get_iarc_client
 from lib.iarc.utils import (get_iarc_app_title, render_xml,
                             REVERSE_DESC_MAPPING, REVERSE_INTERACTIVES_MAPPING)
 from lib.utils import static_url
-from translations.fields import (PurifiedField, save_signal, TranslatedField,
-                                 Translation)
-
-import mkt
 from mkt.access import acl
 from mkt.access.acl import action_allowed, check_reviewer
 from mkt.constants import APP_FEATURES, apps
+from mkt.files.models import File, nfd_str, Platform
+from mkt.files.utils import parse_addon, WebAppParser
 from mkt.prices.models import AddonPremium, Price
 from mkt.ratings.models import Review
 from mkt.regions.utils import parse_region
 from mkt.search.utils import S
 from mkt.site.models import DynamicBoolFieldsMixin
 from mkt.tags.models import Tag
+from mkt.translations.fields import (PurifiedField, save_signal,
+                                     TranslatedField, Translation)
 from mkt.users.models import UserForeignKey, UserProfile
 from mkt.versions.models import Version
 from mkt.webapps import query, signals
@@ -920,14 +915,6 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
     def can_be_deleted(self):
         return not self.is_deleted
 
-    @amo.cached_property
-    def tags_partitioned_by_developer(self):
-        """Returns a tuple of developer tags and user tags for this addon."""
-        tags = self.tags.not_blacklisted()
-        user_tags = tags.exclude(addon_tags__user__in=self.listed_authors)
-        dev_tags = tags.exclude(id__in=[t.id for t in user_tags])
-        return dev_tags, user_tags
-
     def has_author(self, user, roles=None):
         """True if ``user`` is an author with any of the specified ``roles``.
 
@@ -993,18 +980,6 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
         """NULLify strings in this locale for the add-on and versions."""
         for o in itertools.chain([self], self.versions.all()):
             Translation.objects.remove_for(o, locale)
-
-    def get_localepicker(self):
-        """For language packs, gets the contents of localepicker."""
-        if (self.type == amo.ADDON_LPAPP and self.status == amo.STATUS_PUBLIC
-            and self.current_version):
-            files = (self.current_version.files
-                         .filter(platform__in=amo.MOBILE_PLATFORMS.keys()))
-            try:
-                return unicode(files[0].get_localepicker(), 'utf-8')
-            except IndexError:
-                pass
-        return ''
 
     def get_mozilla_contacts(self):
         return [x.strip() for x in self.mozilla_contact.split(',')]

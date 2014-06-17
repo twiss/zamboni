@@ -24,27 +24,27 @@ import mkt
 from amo import get_user
 from amo.fields import SeparatedValuesField
 from amo.utils import remove_icons, slug_validator, slugify
-from files.models import FileUpload
-from files.utils import WebAppParser
 from lib.video import tasks as vtasks
 from mkt.access import acl
 from mkt.api.models import Access
 from mkt.constants import MAX_PACKAGED_APP_SIZE
+from mkt.files.models import FileUpload
+from mkt.files.utils import WebAppParser
 from mkt.regions import REGIONS_CHOICES_SORTED_BY_NAME
 from mkt.regions.utils import parse_region
 from mkt.reviewers.models import RereviewQueue
 from mkt.site.forms import AddonChoiceField
 from mkt.tags.models import Tag
+from mkt.translations.fields import TransField
+from mkt.translations.forms import TranslationFormMixin
+from mkt.translations.models import Translation
+from mkt.translations.widgets import TranslationTextarea, TransTextarea
 from mkt.versions.models import Version
 from mkt.webapps.forms import clean_slug, clean_tags, icons
 from mkt.webapps.models import (Addon, AddonUser, BlacklistedSlug, Category,
                                 IARCInfo, Preview, Webapp)
 from mkt.webapps.tasks import index_webapps, update_manifests
 from mkt.webapps.widgets import CategoriesSelectMultiple, IconWidgetRenderer
-from translations.fields import TransField
-from translations.forms import TranslationFormMixin
-from translations.models import Translation
-from translations.widgets import TranslationTextarea, TransTextarea
 
 from . import tasks
 

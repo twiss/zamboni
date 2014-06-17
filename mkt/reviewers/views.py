@@ -38,7 +38,6 @@ from amo.helpers import absolutify, urlparams
 from amo.models import manual_order
 from amo.utils import (escape_all, HttpResponseSendFile, JSONEncoder, paginate,
                        redirect_for_login, smart_decode)
-from files.models import File
 from lib.crypto.packaged import SigningError
 from mkt.abuse.models import AbuseReport
 from mkt.access import acl
@@ -48,6 +47,7 @@ from mkt.api.authorization import GroupPermission
 from mkt.api.base import SlugOrIdMixin
 from mkt.comm.forms import CommAttachmentFormSet
 from mkt.developers.models import ActivityLog, ActivityLogAttachment
+from mkt.files.models import File
 from mkt.ratings.forms import ReviewFlagFormSet
 from mkt.ratings.models import Review, ReviewFlag
 from mkt.regions.utils import parse_region
@@ -65,15 +65,15 @@ from mkt.site import messages
 from mkt.site.helpers import product_as_dict
 from mkt.submit.forms import AppFeaturesForm
 from mkt.tags.models import Tag
+from mkt.translations.query import order_by_translation
+from mkt.users.models import UserProfile
 from mkt.webapps.decorators import app_view
 from mkt.webapps.models import AddonDeviceType, Version, Webapp, WebappIndexer
 from mkt.webapps.signals import version_changed
 from mkt.zadmin.models import set_config, unmemoized_get_config
-from translations.query import order_by_translation
-from mkt.users.models import UserProfile
 
 from . import forms
-from .models import AppCannedResponse
+from .models import CannedResponse
 
 
 QUEUE_PER_PAGE = 100
@@ -388,7 +388,7 @@ def _review(request, addon, version):
 
         return redirect(redirect_url)
 
-    canned = AppCannedResponse.objects.all()
+    canned = CannedResponse.objects.all()
     actions = form.helper.actions.items()
 
     try:

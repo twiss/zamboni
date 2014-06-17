@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from translations.helpers import truncate
+from mkt.translations.helpers import truncate
 
 from .models import CannedResponse, EventLog, ReviewerScore
 
@@ -11,7 +11,6 @@ class CannedResponseAdmin(admin.ModelAdmin):
     truncate_response.short_description = 'Response'
 
     list_display = ('name', truncate_response)
-    list_filter = ('type',)
 
 
 class EventLogAdmin(admin.ModelAdmin):

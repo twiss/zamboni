@@ -12,17 +12,16 @@ from pyquery import PyQuery as pq
 import amo
 import amo.tests
 from amo.tests.test_helpers import render
-from files.models import File, Platform
 from mkt.developers import helpers
+from mkt.files.models import File, Platform
+from mkt.users.models import UserProfile
 from mkt.versions.models import Version
 from mkt.webapps.models import Addon
-from mkt.users.models import UserProfile
 
 
 def test_hub_page_title():
     translation.activate('en-US')
     request = Mock()
-    request.APP = None
     addon = Mock()
     addon.name = 'name'
     ctx = {'request': request, 'addon': addon}
@@ -45,7 +44,6 @@ class TestNewDevBreadcrumbs(amo.tests.TestCase):
 
     def setUp(self):
         self.request = Mock()
-        self.request.APP = None
 
     def test_no_args(self):
         s = render('{{ hub_breadcrumbs() }}', {'request': self.request})
