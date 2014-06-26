@@ -5,7 +5,6 @@ CSS = {
         'css/zamboni/zamboni.css',
         'css/zamboni/mkt-admin.css',
         'css/zamboni/admin-django.css',
-        'css/zamboni/admin-mozilla.css',
     ),
     'mkt/devreg': (
         # Contains reset, clearfix, etc.
@@ -29,6 +28,9 @@ CSS = {
         # Buttons (used for paginator, "Edit" buttons, Refunds page).
         'css/devreg/buttons.styl',
 
+        # Forms (used for tables on "Manage ..." pages).
+        'css/devreg/forms.styl',
+
         # Popups, Modals, Tooltips.
         'css/devreg/notification.styl',
         'css/devreg/overlay.styl',
@@ -38,9 +40,6 @@ CSS = {
 
         # L10n menu ("Localize for ...").
         'css/devreg/l10n.styl',
-
-        # Forms (used for tables on "Manage ..." pages).
-        'css/devreg/forms.styl',
 
         # Tables.
         'css/devreg/data-grid.styl',

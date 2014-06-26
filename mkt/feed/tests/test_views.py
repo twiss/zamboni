@@ -2,6 +2,7 @@
 import json
 
 from django.core.urlresolvers import reverse
+from django.utils.text import slugify
 
 from nose.tools import eq_, ok_
 
@@ -11,7 +12,8 @@ from amo.tests import app_factory
 import mkt.carriers
 import mkt.regions
 from mkt.api.tests.test_oauth import RestOAuth
-from mkt.feed.models import FeedApp, FeedBrand, FeedCollection, FeedItem
+from mkt.feed.models import (FeedApp, FeedBrand, FeedCollection, FeedItem,
+                             FeedShelf)
 from mkt.feed.tests.test_models import FeedAppMixin, FeedTestMixin
 from mkt.webapps.models import Preview, Webapp
 
@@ -332,6 +334,13 @@ class TestFeedAppViewSetCreate(BaseTestFeedAppViewSet):
         for field, value in self.pullquote_data.iteritems():
             eq_(data[field], value)
 
+    def test_create_slug_xss(self):
+        xss_slug = u"<script>alert('yo.');</script>"
+        self.feed_permission()
+        self.feedapp_data.update(slug=xss_slug)
+        res, data = self.create(self.client, **self.feedapp_data)
+        eq_(data['slug'], slugify(xss_slug))
+
     def test_create_with_pullquote_no_rating(self):
         del self.pullquote_data['pullquote_rating']
         self.test_create_with_pullquote()
@@ -614,6 +623,15 @@ class BaseTestFeedCollection(object):
         for name, value in self.obj_data.iteritems():
             eq_(value, data[name])
 
+    def test_create_slug_xss(self):
+        self.feed_permission()
+        obj_data = dict(self.obj_data)
+        xss_slug = u"<script>alert('yo.');</script>"
+        if 'slug' in obj_data:
+            obj_data.update({'slug': xss_slug})
+        res, data = self.create(self.client, **obj_data)
+        eq_(data['slug'], slugify(xss_slug))
+
     def test_create_with_apps(self):
         self.feed_permission()
         apps = [app.pk for app in self.make_apps()]
@@ -698,13 +716,6 @@ class TestFeedCollectionViewSet(BaseTestFeedCollection, RestOAuth):
     }
     model = FeedCollection
     url_basename = 'feedcollections'
-
-    def make_item(self):
-        """
-        Add additional unique fields: `description` and `name`.
-        """
-        super(TestFeedCollectionViewSet, self).make_item(
-            description={'en-US': 'Baby Potato'}, name={'en-US': 'Sprout'})
 
     def ungrouped_apps(self):
         apps = [app_factory() for i in xrange(3)]
@@ -795,6 +806,41 @@ class TestFeedCollectionViewSet(BaseTestFeedCollection, RestOAuth):
         data = json.loads(res.content)
         self.assertSetEqual(
             apps, [app['id'] for app in data['apps']])
+
+
+class TestFeedShelfViewSet(BaseTestFeedCollection, RestOAuth):
+    obj_data = {
+        'background_color': '#00AACC',
+        'carrier': 'telefonica',
+        'description': {'en-US': 'Potato french fries'},
+        'region': 'br',
+        'slug': 'potato',
+        'name': {'en-US': 'Deep Fried'}
+    }
+    model = FeedShelf
+    url_basename = 'feedshelves'
+
+    def make_item(self):
+        """
+        Add additional unique fields: `description` and `name`.
+        """
+        super(TestFeedShelfViewSet, self).make_item(
+            carrier=1, region=7, name={'en-US': 'Sprout'},
+            description={'en-US': 'Baby Potato'})
+
+    def setUp(self):
+        super(TestFeedShelfViewSet, self).setUp()
+        self.obj_data.update({
+            'carrier': 'telefonica',
+            'region': 'br'
+        })
+
+    def test_create_with_permission(self):
+        self.feed_permission()
+        res, data = self.create(self.client, **self.obj_data)
+        eq_(res.status_code, 201)
+        for name, value in self.obj_data.iteritems():
+            eq_(value, data[name])
 
 
 class TestBuilderView(FeedAppMixin, BaseTestFeedItemViewSet):
@@ -898,6 +944,7 @@ class TestFeedElementSearchView(BaseTestFeedItemViewSet, amo.tests.ESTestCase):
         self.app = self.feed_app_factory()
         self.brand = self.feed_brand_factory()
         self.collection = self.feed_collection_factory(name='Super Collection')
+        self.shelf = self.feed_shelf_factory()
         self.feed_permission()
         self.url = reverse('api-v2:feed.element-search')
 
@@ -907,6 +954,7 @@ class TestFeedElementSearchView(BaseTestFeedItemViewSet, amo.tests.ESTestCase):
         self.refresh(FeedApp._meta.db_table)
         self.refresh(FeedBrand._meta.db_table)
         self.refresh(FeedCollection._meta.db_table)
+        self.refresh(FeedShelf._meta.db_table)
 
     def _search(self, q):
         res = self.client.get(self.url, data={'q': 'feed'})
@@ -919,3 +967,41 @@ class TestFeedElementSearchView(BaseTestFeedItemViewSet, amo.tests.ESTestCase):
         eq_(data['apps'][0]['id'], self.app.id)
         eq_(data['brands'][0]['id'], self.brand.id)
         eq_(data['collections'][0]['id'], self.collection.id)
+        eq_(data['shelves'][0]['id'], self.shelf.id)
+
+
+class TestFeedShelfPublishView(BaseTestFeedItemViewSet, amo.tests.TestCase):
+    fixtures = BaseTestFeedItemViewSet.fixtures + FeedTestMixin.fixtures
+
+    def setUp(self):
+        super(TestFeedShelfPublishView, self).setUp()
+        self.shelf = self.feed_shelf_factory()
+        self.url = reverse('api-v2:feed-shelf-publish', args=[self.shelf.id])
+        self.feed_permission()
+
+    def test_publish(self):
+        res = self.client.put(self.url)
+        data = json.loads(res.content)
+        eq_(res.status_code, 201)
+
+        eq_(data['carrier'],
+            mkt.carriers.CARRIER_CHOICE_DICT[self.shelf.carrier].slug)
+        eq_(data['region'],
+            mkt.regions.REGIONS_CHOICES_ID_DICT[self.shelf.region].slug)
+        eq_(data['shelf']['id'], self.shelf.id)
+
+    def test_publish_overwrite(self):
+        self.client.put(self.url)
+        eq_(FeedItem.objects.count(), 1)
+        assert FeedItem.objects.filter(shelf_id=self.shelf.id).exists()
+
+        new_shelf = self.feed_shelf_factory()
+        new_url = reverse('api-v2:feed-shelf-publish', args=[new_shelf.id])
+        self.client.put(new_url)
+        eq_(FeedItem.objects.count(), 1)
+        assert FeedItem.objects.filter(shelf_id=new_shelf.id).exists()
+
+    def test_404(self):
+        self.url = reverse('api-v2:feed-shelf-publish', args=[8008135])
+        res = self.client.put(self.url)
+        eq_(res.status_code, 404)

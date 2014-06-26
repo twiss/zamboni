@@ -74,6 +74,9 @@ UPLOADS_PATH = NETAPP_STORAGE + '/uploads'
 USERPICS_PATH = UPLOADS_PATH + '/userpics'
 ADDON_ICONS_PATH = UPLOADS_PATH + '/addon_icons'
 COLLECTIONS_ICON_PATH = UPLOADS_PATH + '/collection_icons'
+FEATURED_APP_BG_PATH = UPLOADS_PATH + '/featured_app_background'
+FEED_COLLECTION_BG_PATH = UPLOADS_PATH + '/feed_collection_background'
+FEED_SHELF_BG_PATH = UPLOADS_PATH + '/feed_shelf_background'
 IMAGEASSETS_PATH = UPLOADS_PATH + '/imageassets'
 REVIEWER_ATTACHMENTS_PATH = UPLOADS_PATH + '/reviewer_attachment'
 PREVIEWS_PATH = UPLOADS_PATH + '/previews'
@@ -88,9 +91,10 @@ LOGGING['loggers'].update({
     'raven': {'level': logging.WARNING},
     'requests': {'level': logging.WARNING},
     'z.addons': {'level': logging.DEBUG},
+    'z.elasticsearch': {'level': logging.DEBUG},
+    'z.pool': {'level': logging.ERROR},
     'z.task': {'level': logging.DEBUG},
     'z.redis': {'level': logging.DEBUG},
-    'z.pool': {'level': logging.ERROR},
 })
 
 REDIS_BACKEND = private.REDIS_BACKENDS_CACHE

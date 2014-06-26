@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.utils.text import slugify
 
 from rest_framework import relations, serializers
 from rest_framework.reverse import reverse
@@ -8,7 +9,9 @@ import mkt.carriers
 import mkt.regions
 from mkt.api.fields import SplitField, TranslationSerializerField
 from mkt.api.serializers import URLSerializerMixin
+from mkt.carriers import CARRIER_CHOICE_DICT
 from mkt.collections.serializers import SlugChoiceField, SlugModelChoiceField
+from mkt.regions import REGIONS_CHOICES_ID_DICT
 from mkt.submit.serializers import PreviewSerializer
 from mkt.webapps.models import Category
 from mkt.webapps.serializers import AppSerializer
@@ -16,10 +19,21 @@ from mkt.webapps.serializers import AppSerializer
 from . import constants
 from .fields import FeedCollectionMembershipField
 from .models import (FeedApp, FeedBrand, FeedCollection,
-                     FeedCollectionMembership, FeedItem)
+                     FeedCollectionMembership, FeedItem, FeedShelf)
 
 
-class BaseFeedCollectionSerializer(URLSerializerMixin,
+class ValidateSlugMixin(object):
+    """
+    Rather than raise validation errors on slugs, coerce them into something
+    safer.
+    """
+    def validate_slug(self, attrs, source):
+        if source in attrs:
+            attrs[source] = slugify(attrs[source])
+        return attrs
+
+
+class BaseFeedCollectionSerializer(ValidateSlugMixin, URLSerializerMixin,
                                    serializers.ModelSerializer):
     """
     Base serializer for subclasses of BaseFeedCollection.
@@ -47,7 +61,8 @@ class FeedImageField(serializers.HyperlinkedRelatedField):
             return None
 
 
-class FeedAppSerializer(URLSerializerMixin, serializers.ModelSerializer):
+class FeedAppSerializer(ValidateSlugMixin, URLSerializerMixin,
+                        serializers.ModelSerializer):
     """
     A serializer for the FeedApp class, which highlights a single app and some
     additional metadata (e.g. a review or a screenshot).
@@ -85,6 +100,25 @@ class FeedBrandSerializer(BaseFeedCollectionSerializer):
         fields = ('apps', 'id', 'layout', 'slug', 'type', 'url')
         model = FeedBrand
         url_basename = 'feedbrands'
+
+
+class FeedShelfSerializer(BaseFeedCollectionSerializer):
+    """
+    A serializer for the FeedBrand class, a type of collection that allows
+    editors to quickly create content without involving localizers.
+    """
+    background_image = FeedImageField(
+        source='*', view_name='api-v2:feed-shelf-image-detail', format='png')
+    carrier = SlugChoiceField(choices_dict=mkt.carriers.CARRIER_MAP)
+    description = TranslationSerializerField(required=False)
+    name = TranslationSerializerField()
+    region = SlugChoiceField(choices_dict=mkt.regions.REGION_LOOKUP)
+
+    class Meta:
+        fields = ('apps', 'background_color', 'background_image', 'carrier',
+                  'description', 'id', 'name', 'region', 'slug', 'url')
+        model = FeedShelf
+        url_basename = 'feedshelves'
 
 
 class FeedCollectionSerializer(BaseFeedCollectionSerializer):
@@ -152,11 +186,13 @@ class FeedItemSerializer(URLSerializerMixin, serializers.ModelSerializer):
                        FeedBrandSerializer())
     collection = SplitField(relations.PrimaryKeyRelatedField(required=False),
                             FeedCollectionSerializer())
+    shelf = SplitField(relations.PrimaryKeyRelatedField(required=False),
+                       FeedShelfSerializer())
 
     class Meta:
         fields = ('app', 'brand', 'carrier', 'category', 'collection', 'id',
-                  'item_type', 'region', 'url')
-        item_types = ('app', 'brand', 'collection')
+                  'item_type', 'region', 'shelf', 'url')
+        item_types = ('app', 'brand', 'collection', 'shelf',)
         model = FeedItem
         url_basename = 'feeditems'
 
@@ -180,3 +216,24 @@ class FeedItemSerializer(URLSerializerMixin, serializers.ModelSerializer):
             if getattr(obj, item_type):
                 return item_type
         return
+
+    def validate_shelf(self, attrs, source):
+        """
+        If `shelf` is defined, validate that the FeedItem's `carrier` and
+        `region` match the `carrier` and `region on `shelf`.
+        """
+        shelf_id = attrs.get(source)
+        if shelf_id:
+            shelf = FeedShelf.objects.get(pk=shelf_id)
+
+            carrier = CARRIER_CHOICE_DICT[shelf.carrier]
+            if attrs.get('carrier') != carrier.slug:
+                raise serializers.ValidationError(
+                    'Feed item carrier does not match operator shelf carrier.')
+
+            region = REGIONS_CHOICES_ID_DICT[shelf.region]
+            if attrs.get('region') != region.slug:
+                raise serializers.ValidationError(
+                    'Feed item region does not match operator shelf region.')
+
+        return attrs

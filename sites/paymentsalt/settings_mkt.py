@@ -40,10 +40,10 @@ LOG_LEVEL = logging.DEBUG
 # The django statsd client to use, see django-statsd for more.
 #STATSD_CLIENT = 'django_statsd.clients.moz_heka'
 
-SYSLOG_TAG = "http_app_addons_marketplace_altpay"
-SYSLOG_TAG2 = "http_app_addons_marketplacestage_timer"
-SYSLOG_CSP = "http_app_addons_marketplacestage_csp"
-STATSD_PREFIX = 'marketplace-stage'
+SYSLOG_TAG = "http_app_mkt_paymentsalt"
+SYSLOG_TAG2 = "http_app_mkt_paymentsalt_timer"
+SYSLOG_CSP = "http_app_mkt_paymentsalt_csp"
+STATSD_PREFIX = 'marketplace-paymentsalt'
 
 ## Celery
 BROKER_URL = private_mkt.BROKER_URL
@@ -147,3 +147,7 @@ PRE_GENERATE_APK_URL = \
 # Bug 1002569.
 PAYMENT_PROVIDERS = ['bango', 'boku']
 DEFAULT_PAYMENT_PROVIDER = 'bango'
+
+FXA_OAUTH_URL = getattr(private_mkt, 'FXA_OAUTH_URL', '')
+FXA_CLIENT_ID = getattr(private_mkt, 'FXA_CLIENT_ID', '')
+FXA_CLIENT_SECRET = getattr(private_mkt, 'FXA_CLIENT_SECRET', '')

@@ -41,9 +41,9 @@ LOG_LEVEL = logging.DEBUG
 # The django statsd client to use, see django-statsd for more.
 #STATSD_CLIENT = 'django_statsd.clients.moz_heka'
 
-SYSLOG_TAG = "http_app_addons_marketplacestage"
-SYSLOG_TAG2 = "http_app_addons_marketplacestage_timer"
-SYSLOG_CSP = "http_app_addons_marketplacestage_csp"
+SYSLOG_TAG = "http_app_mkt_stage"
+SYSLOG_TAG2 = "http_app_mkt_stage_timer"
+SYSLOG_CSP = "http_app_mkt_stage_csp"
 STATSD_PREFIX = 'marketplace-stage'
 
 ## Celery
@@ -149,3 +149,7 @@ PRE_GENERATE_APK_URL = \
     'https://apk-controller.stage.mozaws.net/application.apk'
 
 BOKU_SIGNUP_URL = 'https://merchants.boku.com/signup/signup_business?params=jEHWaTM7zm5cbPpheT2iS4xB1mkzO85uxVAo7rs7LVgy5JYGMWnUYDvxyEk8lxalP1pJZFv5d9oI%0A9bcXqxv0MQ%3D%3D'
+
+FXA_OAUTH_URL = getattr(private_mkt, 'FXA_OAUTH_URL', '')
+FXA_CLIENT_ID = getattr(private_mkt, 'FXA_CLIENT_ID', '')
+FXA_CLIENT_SECRET = getattr(private_mkt, 'FXA_CLIENT_SECRET', '')

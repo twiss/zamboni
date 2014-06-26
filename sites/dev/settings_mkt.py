@@ -37,9 +37,9 @@ CACHE_PREFIX = 'dev.mkt.%s' % CACHE_PREFIX
 CACHE_MIDDLEWARE_KEY_PREFIX = CACHE_PREFIX
 CACHES['default']['KEY_PREFIX'] = CACHE_PREFIX
 
-SYSLOG_TAG = "http_app_addons_marketplacedev"
-SYSLOG_TAG2 = "http_app_addons_marketplacedev_timer"
-SYSLOG_CSP = "http_app_addons_marketplacedev_csp"
+SYSLOG_TAG = "http_app_mkt_dev"
+SYSLOG_TAG2 = "http_app_mkt_dev_timer"
+SYSLOG_CSP = "http_app_mkt_dev_csp"
 
 STATSD_PREFIX = 'marketplace-dev'
 
@@ -87,12 +87,7 @@ VALIDATOR_IAF_URLS = ['https://marketplace.firefox.com',
 # Override the limited marketplace ones with these ones from AMO. Because
 # the base gets overridden in the mkt.settings file, we'll set them back again.
 # Note the addition of dbg here.
-AMO_LANGUAGES = (
-    'af', 'ar', 'bg', 'ca', 'cs', 'da', 'de', 'el', 'en-US', 'es', 'eu', 'fa',
-    'fi', 'fr', 'ga-IE', 'he', 'hu', 'id', 'it', 'ja', 'ko', 'mn', 'nl', 'pl',
-    'pt-BR', 'pt-PT', 'ro', 'ru', 'sk', 'sl', 'sq', 'sr', 'sr-Latn', 'sv-SE',
-    'tr', 'uk', 'vi', 'zh-CN', 'zh-TW', 'dbg'
-)
+AMO_LANGUAGES = AMO_LANGUAGES + ('dbg',)
 LANGUAGES = lazy(lazy_langs, dict)(AMO_LANGUAGES)
 LANGUAGE_URL_MAP = dict([(i.lower(), i) for i in AMO_LANGUAGES])
 HIDDEN_LANGUAGES = (
@@ -180,3 +175,7 @@ DEFAULT_PAYMENT_PROVIDER = 'reference'
 
 PRE_GENERATE_APKS = True
 PRE_GENERATE_APK_URL = 'http://dapk.net/application.apk'
+
+FXA_OAUTH_URL = getattr(private_mkt, 'FXA_OAUTH_URL', '')
+FXA_CLIENT_ID = getattr(private_mkt, 'FXA_CLIENT_ID', '')
+FXA_CLIENT_SECRET = getattr(private_mkt, 'FXA_CLIENT_SECRET', '')

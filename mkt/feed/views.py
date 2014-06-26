@@ -1,3 +1,5 @@
+from django.db.models import Q
+
 from elasticutils.contrib.django import S
 from rest_framework import response, status, viewsets
 from rest_framework.exceptions import ParseError
@@ -5,6 +7,7 @@ from rest_framework.filters import BaseFilterBackend, OrderingFilter
 from rest_framework.views import APIView
 
 import mkt
+import mkt.feed.constants as feed
 from mkt.api.authentication import (RestAnonymousAuthentication,
                                     RestOAuthAuthentication,
                                     RestSharedSecretAuthentication)
@@ -12,13 +15,14 @@ from mkt.api.authorization import AllowReadOnly, AnyOf, GroupPermission
 from mkt.api.base import (CORSMixin, MarketplaceView, SlugOrIdMixin)
 from mkt.collections.views import CollectionImageViewSet
 from mkt.feed.indexers import (FeedAppIndexer, FeedBrandIndexer,
-                               FeedCollectionIndexer)
+                               FeedCollectionIndexer, FeedShelfIndexer)
 from mkt.webapps.models import Webapp
 
 from .authorization import FeedAuthorization
-from .models import FeedApp, FeedBrand, FeedCollection, FeedItem
+from .models import FeedApp, FeedBrand, FeedCollection, FeedItem, FeedShelf
 from .serializers import (FeedAppSerializer, FeedBrandSerializer,
-                          FeedCollectionSerializer, FeedItemSerializer)
+                          FeedCollectionSerializer, FeedItemSerializer,
+                          FeedShelfSerializer)
 
 
 class BaseFeedCollectionViewSet(CORSMixin, SlugOrIdMixin, MarketplaceView,
@@ -76,17 +80,20 @@ class BaseFeedCollectionViewSet(CORSMixin, SlugOrIdMixin, MarketplaceView,
 
 
 class RegionCarrierFilter(BaseFilterBackend):
-    def filter_queryset(self, request, queryset, view):
-        filters = {}
+    def filter_queryset(self, request, qs, view):
         q = request.QUERY_PARAMS
 
+        # Filter for only the region if specified.
         if q.get('region'):
-            filters['region'] = mkt.regions.REGIONS_DICT[
-                q['region']].id
+            region_id =mkt.regions.REGIONS_DICT[q['region']].id
+            qs = qs.filter(region=region_id)
+
+        # Exclude feed items that specify carrier but do not match carrier.
         if q.get('carrier'):
-            filters['carrier'] = mkt.carriers.CARRIER_MAP[
-                q['carrier']].id
-        return queryset.filter(**filters)
+            carrier = mkt.carriers.CARRIER_MAP[q['carrier']].id
+            qs = qs.exclude(~Q(carrier=carrier), carrier__isnull=False)
+
+        return qs
 
 
 class FeedItemViewSet(CORSMixin, viewsets.ModelViewSet):
@@ -185,6 +192,10 @@ class FeedCollectionImageViewSet(CollectionImageViewSet):
     queryset = FeedCollection.objects.all()
 
 
+class FeedShelfImageViewSet(CollectionImageViewSet):
+    queryset = FeedShelf.objects.all()
+
+
 class FeedBrandViewSet(BaseFeedCollectionViewSet):
     """
     A viewset for the FeedBrand class, a type of collection that allows editors
@@ -217,6 +228,50 @@ class FeedCollectionViewSet(BaseFeedCollectionViewSet):
             super(FeedCollectionViewSet, self).set_apps(obj, apps)
         except TypeError:
             self.set_apps_grouped(obj, apps)
+
+
+class FeedShelfViewSet(BaseFeedCollectionViewSet):
+    """
+    A viewset for the FeedShelf class.
+    """
+    serializer_class = FeedShelfSerializer
+    queryset = FeedShelf.objects.all()
+
+
+class FeedShelfPublishView(CORSMixin, APIView):
+    """
+    Create a FeedItem for a FeedShelf with respective carrier/region pair.
+    Deletes any currently existing FeedItems with the carrier/region pair to
+    effectively "unpublish" it since only one shelf can be toggled at a time
+    for a carrier/region.
+    """
+    authentication_classes = [RestOAuthAuthentication,
+                              RestSharedSecretAuthentication]
+    permission_classes = [GroupPermission('Feed', 'Curate')]
+    cors_allowed_methods = ('put',)
+
+    def put(self, request, *args, **kwargs):
+        pk = self.kwargs['pk']
+        try:
+            if pk.isdigit():
+                shelf = FeedShelf.objects.get(pk=pk)
+            else:
+                shelf = FeedShelf.objects.get(slug=pk)
+        except FeedShelf.DoesNotExist:
+            return response.Response(status=status.HTTP_404_NOT_FOUND)
+
+        feed_item_kwargs = {
+            'item_type': feed.FEED_TYPE_SHELF,
+            'carrier': shelf.carrier,
+            'region': shelf.region
+        }
+        FeedItem.objects.filter(**feed_item_kwargs).delete()
+        feed_item = FeedItem.objects.create(shelf_id=shelf.id,
+                                            **feed_item_kwargs)
+
+        # Return.
+        return response.Response(FeedItemSerializer(feed_item).data,
+                                 status=status.HTTP_201_CREATED)
 
 
 class FeedElementSearchView(CORSMixin, APIView):
@@ -260,11 +315,15 @@ class FeedElementSearchView(CORSMixin, APIView):
             **query).values_list('id')]
         feed_collection_ids = ([pk[0] for pk in S(FeedCollectionIndexer).query(
             name__match=self._fuzzy(q), **query).values_list('id')])
+        feed_shelf_ids = ([pk[0] for pk in S(FeedShelfIndexer).query(
+            name__match=self._fuzzy(q), slug__match=self._fuzzy(q),
+            carrier__prefix=q, region=q, should=True).values_list('id')])
 
         # Dehydrate.
         apps = FeedApp.objects.filter(id__in=feed_app_ids)
         brands = FeedBrand.objects.filter(id__in=feed_brand_ids)
         colls = FeedCollection.objects.filter(id__in=feed_collection_ids)
+        shelves = FeedShelf.objects.filter(id__in=feed_shelf_ids)
 
         # Serialize.
         ctx = {'request': request}
@@ -273,10 +332,13 @@ class FeedElementSearchView(CORSMixin, APIView):
                   for brand in brands]
         collections = [FeedCollectionSerializer(coll, context=ctx).data
                        for coll in colls]
+        shelves = [FeedShelfSerializer(shelf, context=ctx).data
+                   for shelf in shelves]
 
         # Return.
         return response.Response({
             'apps': apps,
             'brands': brands,
-            'collections': collections
+            'collections': collections,
+            'shelves': shelves
         })

@@ -371,9 +371,6 @@ COLLECTION_AUTHOR_CHOICES = {
     COLLECTION_ROLE_ADMIN: 'Admin',
 }
 
-# Contributions.
-FOUNDATION_ORG = 1  # The charities.id of the Mozilla Foundation.
-
 VERSION_BETA = re.compile('(a|alpha|b|beta|pre|rc)\d*$')
 VERSION_SEARCH = re.compile('\.(\d+)$')
 
@@ -438,6 +435,8 @@ LOGIN_SOURCE_BROWSERID = 1
 LOGIN_SOURCE_MMO_BROWSERID = 2
 # Everyone who signed up for AMO once it uses BrowserID.
 LOGIN_SOURCE_AMO_BROWSERID = 3
+# Signups via Firefox Accounts.
+LOGIN_SOURCE_FXA = 4
 
 # These are logins that use BrowserID.
 LOGIN_SOURCE_BROWSERIDS = [LOGIN_SOURCE_BROWSERID, LOGIN_SOURCE_AMO_BROWSERID,

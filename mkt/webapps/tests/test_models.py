@@ -59,8 +59,9 @@ from mkt.webapps.models import (Addon, AddonCategory, AddonDeviceType,
                                 AddonExcludedRegion, AddonUpsell, AppFeatures,
                                 AppManifest, BlacklistedSlug, Category,
                                 ContentRating, Geodata, get_excluded_in,
-                                IARCInfo, Installed, Preview, RatingDescriptors,
-                                RatingInteractives, version_changed, Webapp)
+                                IARCInfo, Installed, Preview,
+                                RatingDescriptors, RatingInteractives,
+                                version_changed, Webapp)
 from mkt.webapps.signals import version_changed as version_changed_signal
 
 
@@ -1661,7 +1662,27 @@ class PackagedFilesMixin(amo.tests.AMOPaths):
 
 class TestPackagedModel(amo.tests.TestCase):
 
-    @mock.patch.object(settings, 'SITE_URL', 'http://hy.fr')
+    @override_settings(SITE_URL='http://hy.fr')
+    def test_get_package_path(self):
+        app = app_factory(name=u'Mozillaball ょ', app_slug='test',
+                          is_packaged=False, version_kw={'version': '1.0',
+                                                         'created': None})
+        app = app.reload()
+        f = app.versions.latest().files.latest()
+
+        # There should not be a `package_path` for a hosted app.
+        eq_(app.get_package_path(), None)
+
+        # There should be a `package_path` for a packaged app.
+        app.update(is_packaged=True)
+        eq_(app.get_package_path(),
+            'http://hy.fr/downloads/file/%s/%s' % (f.id, f.filename))
+
+        # Delete one of the files and ensure that `package_path` is gone.
+        f.delete()
+        eq_(app.reload().get_package_path(), None)
+
+    @override_settings(SITE_URL='http://hy.fr')
     @mock.patch('lib.crypto.packaged.os.unlink', new=mock.Mock)
     def test_create_blocklisted_version(self):
         app = app_factory(name=u'Mozillaball ょ', app_slug='test',

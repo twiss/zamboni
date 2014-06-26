@@ -194,12 +194,12 @@ LOGGING = {
         'amqplib': {'handlers': ['null']},
         'caching.invalidation': {'handlers': ['null']},
         'caching': {'level': logging.WARNING},
-        'suds': {'handlers': ['null']},
-        'z.task': {'level': logging.INFO},
-        'z.es': {'level': logging.INFO},
-        'z.heka': {'level': logging.INFO},
-        's.client': {'level': logging.INFO},
         'nose': {'level': logging.WARNING},
+        's.client': {'level': logging.INFO},
+        'suds': {'handlers': ['null']},
+        'z.heka': {'level': logging.INFO},
+        'z.es': {'level': logging.INFO},
+        'z.task': {'level': logging.INFO},
     },
 }
 LOGGING_CONFIG = None
@@ -307,6 +307,7 @@ DUMPED_APPS_PATH = NETAPP_STORAGE + '/dumped-apps'
 DUMPED_USERS_PATH = NETAPP_STORAGE + '/dumped-users'
 FEATURED_APP_BG_PATH = UPLOADS_PATH + '/featured_app_background'
 FEED_COLLECTION_BG_PATH = UPLOADS_PATH + '/feed_collection_background'
+FEED_SHELF_BG_PATH = UPLOADS_PATH + '/feed_shelf_background'
 
 # Like ADDONS_PATH but protected by the app. Used for storing files that should
 # not be publicly accessible (like disabled add-ons).
@@ -444,9 +445,10 @@ ALLOW_SELF_REVIEWS = True
 
 # A smaller range of languages for the Marketplace.
 AMO_LANGUAGES = (
-    'bg', 'bn-BD', 'ca', 'cs', 'da', 'de', 'el', 'en-US', 'es', 'fr', 'ga-IE',
-    'hr', 'hu', 'it', 'ja', 'ko', 'mk', 'nb-NO', 'nl', 'pl', 'pt-BR', 'ro',
-    'ru', 'sk', 'sq', 'sr', 'sr-Latn', 'tr', 'zh-CN', 'zh-TW',
+    'bg', 'bn-BD', 'ca', 'cs', 'da', 'de', 'el', 'en-US', 'es', 'eu', 'fr',
+    'ga-IE', 'hr', 'hu', 'it', 'ja', 'ko', 'mk', 'nb-NO', 'nl', 'pa', 'pl',
+    'pt-BR', 'ro', 'ru', 'sk', 'sq', 'sr', 'sr-Latn', 'ta', 'tr', 'zh-CN',
+    'zh-TW',
 )
 
 
@@ -454,8 +456,12 @@ def lazy_langs(languages):
     from product_details import product_details
     if not product_details.languages:
         return {}
+    # Here we have to ignore any language that exists in `languages` but not
+    # yet in `product_details.languages`, because otherwise we'll get an
+    # `IndexError`, causing `manage.py update_product_details` to fail
+    # during deployment.
     return dict([(i.lower(), product_details.languages[i]['native'])
-                 for i in languages])
+                 for i in languages if i in product_details.languages])
 
 # Override Django's built-in with our native names, this is a Django setting
 # but we are putting it here because its being overridden.
@@ -682,7 +688,9 @@ ES_INDEXES = {
     'mkt_feed_app': 'feed_apps',
     'mkt_feed_brand': 'feed_brands',
     'mkt_feed_collection': 'feed_collections',
+    'mkt_feed_shelf': 'feed_shelves',
     # Adding an index? Don't forget to add the indexer to ESTestCase.
+    # Also add the index to reindex_mkt.py.
 }
 ES_URLS = ['http://%s' % h for h in ES_HOSTS]
 ES_USE_PLUGINS = False
@@ -705,6 +713,14 @@ FIREPLACE_URL = ''
 
 # Where to find ffmpeg and totem if it's not in the PATH.
 FFMPEG_BINARY = 'ffmpeg'
+
+FXA_CLIENT_ID = '56fc6da8d185c8e3'
+FXA_CLIENT_SECRET = 'd1a8f0088e565d066c3d9f28587f5875a800e0a1618a4aaeabd00e162ac583a3'
+FXA_OAUTH_URL = 'https://oauth.dev.lcip.org'
+if DEBUG:
+    # In DEBUG mode, don't require HTTPS for FxA oauth redirects.
+    import os
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 # GeoIP server settings
 # This flag overrides the GeoIP server functions and will force the
@@ -761,7 +777,7 @@ HEKA = client_from_dict_config(HEKA_CONF)
 # This list also enables translation edits.
 HIDDEN_LANGUAGES = (
     # List of languages from AMO's settings (excluding mkt's active locales).
-    'af', 'ar', 'eu', 'fa', 'fi', 'he', 'id', 'mn', 'pt-PT', 'sl', 'sv-SE',
+    'af', 'ar', 'fa', 'fi', 'he', 'id', 'mn', 'pt-PT', 'sl', 'sv-SE',
     'uk', 'vi',
     # The hidden list from AMO's settings:
     'cy',
