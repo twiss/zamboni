@@ -19,9 +19,9 @@ from django.test.client import Client
 from django.utils import translation
 
 import caching
+import elasticsearch
 import elasticutils.contrib.django as elasticutils
 import mock
-import pyelasticsearch.exceptions as pyelasticsearch
 import test_utils
 import tower
 from dateutil.parser import parse as dateutil_parser
@@ -38,22 +38,25 @@ import amo
 import mkt
 from amo.urlresolvers import get_url_prefix, Prefixer, reverse, set_url_prefix
 from constants.applications import DEVICE_TYPES
+from lib.es.management.commands import reindex_mkt
 from lib.post_request_task import task as post_request_task
 from mkt.access.acl import check_ownership
 from mkt.access.models import Group, GroupUser
 from mkt.constants import regions
 from mkt.feed.indexers import (FeedAppIndexer, FeedBrandIndexer,
-                               FeedCollectionIndexer, FeedShelfIndexer)
+                               FeedCollectionIndexer, FeedItemIndexer,
+                               FeedShelfIndexer)
 from mkt.files.helpers import copyfileobj
 from mkt.files.models import File, Platform
 from mkt.prices.models import AddonPremium, Price, PriceCurrency
+from mkt.search.indexers import BaseIndexer
 from mkt.site.fixtures import fixture
 from mkt.translations.models import Translation
 from mkt.users.models import UserProfile
 from mkt.versions.models import Version
 from mkt.webapps.indexers import WebappIndexer
 from mkt.webapps.models import update_search_index as app_update_search_index
-from mkt.webapps.models import Addon, Category, Webapp
+from mkt.webapps.models import Addon, Webapp
 from mkt.webapps.tasks import unindex_webapps
 
 
@@ -172,9 +175,10 @@ class TestClient(Client):
 
 
 ES_patchers = [mock.patch('elasticutils.contrib.django', spec=True),
+               mock.patch('elasticsearch.Elasticsearch'),
                mock.patch('mkt.webapps.tasks.WebappIndexer', spec=True),
-               mock.patch('mkt.webapps.tasks.Reindexing',
-                          spec=True, side_effect=lambda i: [i])]
+               mock.patch('mkt.webapps.tasks.Reindexing', spec=True,
+                          side_effect=lambda i: [i])]
 
 
 def start_es_mock():
@@ -188,6 +192,9 @@ def stop_es_mock():
 
     if hasattr(elasticutils, '_local') and hasattr(elasticutils._local, 'es'):
         delattr(elasticutils._local, 'es')
+
+    # Reset cached Elasticsearch objects.
+    BaseIndexer._es = {}
 
 
 def mock_es(f):
@@ -244,9 +251,10 @@ class MockBrowserIdMixin(object):
 
         real_login = self.client.login
 
-        def fake_login(username, password):
+        def fake_login(username, password=None):
             with mock_browserid(email=username):
-                return real_login(username=username, password=password)
+                return real_login(username=username, assertion='test',
+                                  audience='test')
 
         self.client.login = fake_login
 
@@ -711,9 +719,8 @@ def app_factory(**kw):
         make_rated(app)
 
     if complete:
-        cat, _ = Category.objects.get_or_create(slug='utilities',
-                                                type=amo.ADDON_WEBAPP)
-        app.addoncategory_set.create(category=cat)
+        if not app.categories:
+            app.update(categories=['utilities'])
         app.addondevicetype_set.create(device_type=DEVICE_TYPES.keys()[0])
         app.previews.create()
 
@@ -729,7 +736,7 @@ def file_factory(**kw):
     return f
 
 
-def req_factory_factory(url, user=None, post=False, data=None):
+def req_factory_factory(url, user=None, post=False, data=None, **kwargs):
     """Creates a request factory, logged in with the user."""
     req = RequestFactory()
     if post:
@@ -741,6 +748,11 @@ def req_factory_factory(url, user=None, post=False, data=None):
         req.user = user
         req.groups = user.groups.all()
     req.check_ownership = partial(check_ownership, req)
+    req.REGION = kwargs.pop('region', mkt.regions.REGIONS_CHOICES[0][1])
+    req.API_VERSION = 2
+
+    for key in kwargs:
+        setattr(req, key, kwargs[key])
     return req
 
 
@@ -780,7 +792,7 @@ class ESTestCase(TestCase):
     def setUpClass(cls):
         if not settings.RUN_ES_TESTS:
             raise SkipTest('ES disabled')
-        cls.es = elasticutils.get_es(timeout=settings.ES_TIMEOUT)
+        cls.es = elasticsearch.Elasticsearch(hosts=settings.ES_HOSTS)
 
         # The ES setting are set before we call super()
         # because we may have indexation occuring in upper classes.
@@ -790,7 +802,7 @@ class ESTestCase(TestCase):
 
         super(ESTestCase, cls).setUpClass()
         try:
-            cls.es.health()
+            cls.es.cluster.health()
         except Exception, e:
             e.args = tuple([u'%s (it looks like ES is not running, '
                             'try starting it or set RUN_ES_TESTS=False)'
@@ -806,22 +818,21 @@ class ESTestCase(TestCase):
         for index in set(settings.ES_INDEXES.values()):
             # Get the index that's pointed to by the alias.
             try:
-                indices = cls.es.aliases(index)
+                indices = cls.es.indices.get_aliases(index=index)
                 assert indices[index]['aliases']
             except (KeyError, AssertionError):
                 # There's no alias, just use the index.
                 print 'Found no alias for %s.' % index
-            except pyelasticsearch.ElasticHttpNotFoundError:
+            except elasticsearch.NotFoundError:
                 pass
 
             # Remove any alias as well.
             try:
-                cls.es.delete_index(index)
-            except pyelasticsearch.ElasticHttpNotFoundError as exc:
-                print 'Could not delete index %r: %s' % (index, exc)
+                cls.es.indices.delete(index=index)
+            except elasticsearch.NotFoundError as e:
+                print 'Could not delete index %r: %s' % (index, e)
 
-        for indexer in (WebappIndexer, FeedAppIndexer, FeedBrandIndexer,
-                        FeedCollectionIndexer, FeedShelfIndexer):
+        for index, indexer, batch in reindex_mkt.INDEXES:
             indexer.setup_mapping()
 
     @classmethod
@@ -847,9 +858,13 @@ class ESTestCase(TestCase):
         cls.refresh()
 
     @classmethod
-    def refresh(cls, index='webapp', timesleep=0):
+    def refresh(cls, doctype='webapp', timesleep=0):
         post_request_task._send_tasks()
-        cls.es.refresh(settings.ES_INDEXES[index])
+        index = settings.ES_INDEXES[doctype]
+        try:
+            cls.es.indices.refresh(index=index)
+        except elasticsearch.NotFoundError as e:
+            print "Could not refresh index '%s': %s" % (index, e)
 
     @classmethod
     def reindex(cls, model, index='default'):
@@ -872,9 +887,7 @@ class WebappTestCase(TestCase):
 
 
 def make_game(app, rated):
-    cat, created = Category.objects.get_or_create(slug='games',
-        type=amo.ADDON_WEBAPP)
-    app.addoncategory_set.create(category=cat)
+    app.update(categories=['games'])
     if rated:
         make_rated(app)
     app = app.reload()

@@ -1,3 +1,5 @@
+import json
+
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.urlresolvers import reverse
 from django.db import transaction
@@ -5,7 +7,6 @@ from django.shortcuts import redirect, render
 from django.utils.translation.trans_real import to_language
 
 import commonware.log
-import waffle
 from rest_framework import mixins
 from rest_framework.exceptions import MethodNotAllowed
 from rest_framework.permissions import AllowAny
@@ -30,6 +31,7 @@ from mkt.developers import tasks
 from mkt.developers.decorators import dev_required
 from mkt.developers.forms import (AppFormMedia, CategoryForm, NewManifestForm,
                                   PreviewForm, PreviewFormSet)
+from mkt.developers.utils import escalate_prerelease_permissions
 from mkt.files.models import FileUpload, Platform
 from mkt.submit.forms import AppDetailsBasicForm
 from mkt.submit.models import AppSubmissionChecklist
@@ -100,14 +102,19 @@ def manifest(request):
     features_form_valid = features_form.is_valid()
 
     if (request.method == 'POST' and form.is_valid()
-        and features_form_valid):
+            and features_form_valid):
 
         with transaction.commit_on_success():
-
+            upload = form.cleaned_data['upload']
             addon = Addon.from_upload(
-                form.cleaned_data['upload'],
+                upload,
                 [Platform.objects.get(id=amo.PLATFORM_ALL.id)],
                 is_packaged=form.is_packaged())
+
+            if form.is_packaged():
+                validation = json.loads(upload.validation)
+                escalate_prerelease_permissions(
+                    addon, validation, addon.current_version)
 
             # Set the device type.
             for device in form.get_devices():
@@ -192,25 +199,21 @@ def details(request, addon_id, addon):
 
         AppSubmissionChecklist.objects.get(addon=addon).update(details=True)
 
-        # `make_public` if the developer doesn't want the app published
+        # `publish_type` if the developer doesn't want the app published
         # immediately upon review.
-        make_public = (amo.PUBLIC_IMMEDIATELY
+        publish_type = (amo.PUBLISH_IMMEDIATE
                        if form_basic.cleaned_data.get('publish')
-                       else amo.PUBLIC_WAIT)
+                       else amo.PUBLISH_PRIVATE)
 
         if addon.premium_type == amo.ADDON_FREE:
-            if waffle.switch_is_active('iarc'):
-                # Free apps get STATUS_NULL until content ratings has been
-                # entered.
-                # TODO: set to STATUS_PENDING once app gets an IARC rating.
-                addon.update(make_public=make_public)
-            else:
-                addon.update(status=amo.STATUS_PENDING,
-                             make_public=make_public)
+            # Free apps are set to STATUS_NULL until content ratings has been
+            # entered. They will not bump to STATUS_PENDING until they get
+            # content ratings.
+            addon.update(publish_type=publish_type)
         else:
             # Paid apps get STATUS_NULL until payment information and content
             # ratings has been entered.
-            addon.update(status=amo.STATUS_NULL, make_public=make_public,
+            addon.update(status=amo.STATUS_NULL, publish_type=publish_type,
                          highest_status=amo.STATUS_PENDING)
 
         # Mark as pending in special regions (i.e., China).
@@ -237,12 +240,8 @@ def details(request, addon_id, addon):
 @dev_required
 def done(request, addon_id, addon):
     # No submit step forced on this page, we don't really care.
-    if waffle.switch_is_active('iarc'):
-        return render(request, 'submit/next_steps.html',
-                      {'step': 'next_steps', 'addon': addon})
-    else:
-        return render(request, 'submit/done.html',
-                      {'step': 'done', 'addon': addon})
+    return render(request, 'submit/next_steps.html',
+                  {'step': 'next_steps', 'addon': addon})
 
 
 @dev_required

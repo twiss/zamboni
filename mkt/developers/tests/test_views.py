@@ -42,7 +42,7 @@ from mkt.translations.models import Translation
 from mkt.users.models import UserProfile
 from mkt.versions.models import Version
 from mkt.webapps.models import (Addon, AddonDeviceType, AddonUpsell, AddonUser,
-                                ContentRating, Webapp)
+                                Webapp)
 
 
 class AppHubTest(amo.tests.TestCase):
@@ -177,7 +177,6 @@ class TestAppDashboard(AppHubTest):
             'Pending Version: 1.24')
 
     def test_action_links(self):
-        self.create_switch('iarc')
         self.create_switch('comm-dashboard')
         self.create_switch('view-transactions')
         app = self.get_app()
@@ -324,8 +323,8 @@ class TestMarketplace(amo.tests.TestCase):
         self.create_flag('allow-b2g-paid-submission')
 
         self.addon = Addon.objects.get(id=337141)
-        self.addon.update(status=amo.STATUS_NOMINATED,
-                          highest_status=amo.STATUS_NOMINATED)
+        self.addon.update(status=amo.STATUS_PUBLIC,
+                          highest_status=amo.STATUS_PUBLIC)
 
         self.url = self.addon.get_dev_url('payments')
         assert self.client.login(username='steamcube@mozilla.com',
@@ -422,11 +421,10 @@ class TestPublicise(amo.tests.TestCase):
     fixtures = fixture('webapp_337141')
 
     def setUp(self):
-        self.create_switch('iarc')
         self.webapp = self.get_webapp()
-        self.webapp.update(status=amo.STATUS_PUBLIC_WAITING)
+        self.webapp.update(status=amo.STATUS_APPROVED)
         self.file = self.webapp.versions.latest().all_files[0]
-        self.file.update(status=amo.STATUS_PUBLIC_WAITING)
+        self.file.update(status=amo.STATUS_APPROVED)
         self.publicise_url = self.webapp.get_dev_url('publicise')
         self.status_url = self.webapp.get_dev_url('versions')
         assert self.client.login(username='steamcube@mozilla.com',
@@ -439,7 +437,7 @@ class TestPublicise(amo.tests.TestCase):
         self.client.logout()
         res = self.client.post(self.publicise_url)
         eq_(res.status_code, 302)
-        eq_(self.get_webapp().status, amo.STATUS_PUBLIC_WAITING)
+        eq_(self.get_webapp().status, amo.STATUS_APPROVED)
 
     def test_publicise_get(self):
         eq_(self.client.get(self.publicise_url).status_code, 405)
@@ -457,7 +455,7 @@ class TestPublicise(amo.tests.TestCase):
         eq_(update_locales.call_count, 0)
         eq_(update_cached_manifests.delay.call_count, 0)
         eq_(storefront_mock.call_count, 0)
-        eq_(self.get_webapp().status, amo.STATUS_PUBLIC_WAITING)
+        eq_(self.get_webapp().status, amo.STATUS_APPROVED)
 
         res = self.client.post(self.publicise_url)
         eq_(res.status_code, 302)
@@ -478,9 +476,7 @@ class TestPublicise(amo.tests.TestCase):
         eq_(res.status_code, 200)
         doc = pq(res.content)
         eq_(doc('#version-status form').attr('action'), self.publicise_url)
-        # TODO: fix this when jenkins can get the jinja helpers loaded in
-        # the correct order.
-        #eq_(len(doc('strong.status-waiting')), 1)
+        eq_(len(doc('strong.status-waiting')), 1)
 
 
 class TestPubliciseVersion(amo.tests.TestCase):
@@ -510,11 +506,11 @@ class TestPubliciseVersion(amo.tests.TestCase):
 
     def test_logout(self):
         File.objects.filter(version__addon=self.app).update(
-            status=amo.STATUS_PUBLIC_WAITING)
+            status=amo.STATUS_APPROVED)
         self.client.logout()
         res = self.post()
         eq_(res.status_code, 302)
-        eq_(self.get_version_status(), amo.STATUS_PUBLIC_WAITING)
+        eq_(self.get_version_status(), amo.STATUS_APPROVED)
 
     def test_publicise_get(self):
         eq_(self.client.get(self.url).status_code, 405)
@@ -523,14 +519,14 @@ class TestPubliciseVersion(amo.tests.TestCase):
     @mock.patch('mkt.webapps.tasks.update_cached_manifests')
     @mock.patch('mkt.webapps.models.Webapp.update_supported_locales')
     @mock.patch('mkt.webapps.models.Webapp.update_name_from_package_manifest')
-    def test_publicise_version_new_waiting(self, update_name, update_locales,
-                                           update_cached_manifests,
-                                           index_webapps):
-        """ Test publishing the latest, public_waiting version when the app is
-        already public, with a current version also already public """
+    def test_publicise_version_new_approved(self, update_name, update_locales,
+                                            update_cached_manifests,
+                                            index_webapps):
+        """ Test publishing the latest, approved version when the app is
+        already public, with a current version also already public. """
         eq_(self.app.status, amo.STATUS_PUBLIC)
         ver = version_factory(addon=self.app, version='2.0',
-                              file_kw=dict(status=amo.STATUS_PUBLIC_WAITING))
+                              file_kw=dict(status=amo.STATUS_APPROVED))
         eq_(self.app.latest_version, ver)
         ok_(self.app.current_version != ver)
 
@@ -552,14 +548,13 @@ class TestPubliciseVersion(amo.tests.TestCase):
     @mock.patch('mkt.webapps.tasks.update_cached_manifests')
     @mock.patch('mkt.webapps.models.Webapp.update_supported_locales')
     @mock.patch('mkt.webapps.models.Webapp.update_name_from_package_manifest')
-    def test_publicise_version_cur_waiting_app_public(self, update_name,
-                                                      update_locales,
-                                                      update_cached_manifests,
-                                                      index_webapps):
+    def test_publicise_version_cur_approved_app_public(
+        self, update_name, update_locales, update_cached_manifests,
+        index_webapps):
         """ Test publishing when the app is in a weird state: public but with
-        only one version, which is public_waiting """
+        only one version, which is approved. """
         File.objects.filter(version__addon=self.app).update(
-            status=amo.STATUS_PUBLIC_WAITING)
+            status=amo.STATUS_APPROVED)
         eq_(self.app.current_version, self.app.latest_version)
         eq_(self.app.status, amo.STATUS_PUBLIC)
 
@@ -584,13 +579,13 @@ class TestPubliciseVersion(amo.tests.TestCase):
     @mock.patch('mkt.webapps.tasks.update_cached_manifests')
     @mock.patch('mkt.webapps.models.Webapp.update_supported_locales')
     @mock.patch('mkt.webapps.models.Webapp.update_name_from_package_manifest')
-    def test_publicise_version_cur_waiting(self, update_name, update_locales,
-                                           update_cached_manifests,
-                                           index_webapps):
-        """ Test publishing when the only version of the app is waiting """
-        self.app.update(status=amo.STATUS_PUBLIC_WAITING)
+    def test_publicise_version_cur_approved(self, update_name, update_locales,
+                                            update_cached_manifests,
+                                            index_webapps):
+        """ Test publishing when the only version of the app is approved. """
+        self.app.update(status=amo.STATUS_APPROVED)
         File.objects.filter(version__addon=self.app).update(
-            status=amo.STATUS_PUBLIC_WAITING)
+            status=amo.STATUS_APPROVED)
         eq_(self.app.current_version, self.app.latest_version)
 
         index_webapps.delay.reset_mock()
@@ -628,7 +623,7 @@ class TestPubliciseVersion(amo.tests.TestCase):
 
     def test_status(self):
         File.objects.filter(version__addon=self.app).update(
-            status=amo.STATUS_PUBLIC_WAITING)
+            status=amo.STATUS_APPROVED)
         res = self.client.get(self.status_url)
         eq_(res.status_code, 200)
         doc = pq(res.content)
@@ -1223,7 +1218,6 @@ class TestContentRatings(amo.tests.TestCase):
     fixtures = fixture('user_admin', 'user_admin_group', 'group_admin')
 
     def setUp(self):
-        self.create_switch('iarc')
         self.app = app_factory()
         self.app.latest_version.update(
             _developer_name='Lex Luthor <lex@kryptonite.org>')
@@ -1279,18 +1273,26 @@ class TestContentRatings(amo.tests.TestCase):
 
     def test_summary(self):
         rbs = mkt.ratingsbodies
-        ratings = [rbs.CLASSIND_L, rbs.GENERIC_3, rbs.USK_18, rbs.ESRB_M,
-                   rbs.PEGI_12]
-        for rating in ratings:
-            ContentRating.objects.create(
-                addon=self.app, ratings_body=rating.ratingsbody.id,
-                rating=rating.id)
+        ratings = {
+            rbs.CLASSIND: rbs.CLASSIND_L,
+            rbs.GENERIC: rbs.GENERIC_3,
+            rbs.USK: rbs.USK_18,
+            rbs.ESRB: rbs.ESRB_M,
+            rbs.PEGI: rbs.PEGI_12
+        }
+        self.app.set_content_ratings(ratings)
+        self.app.set_descriptors(['has_classind_sex', 'has_pegi_lang'])
+        self.app.set_interactives(['has_users_interact'])
 
         r = content_ratings(self.req, app_slug=self.app.app_slug)
         doc = pq(r.content)
 
-        for i, name in enumerate(doc('.name')):
-            eq_(name.text, ratings[i].ratingsbody.name)
+        self.assertSetEqual([name.text for name in doc('.name')],
+                            [body.name for body in ratings])
+        self.assertSetEqual([name.text.strip() for name in doc('.descriptor')],
+                            ['Sexo'])
+        self.assertSetEqual([name.text.strip() for name in doc('.interactive')],
+                            ['Users Interact'])
 
     def test_edit_iarc_app_form(self):
         r = content_ratings_edit(self.req, app_slug=self.app.app_slug)

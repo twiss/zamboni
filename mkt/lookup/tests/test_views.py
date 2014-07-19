@@ -662,7 +662,7 @@ class TestAppSearch(ESTestCase, SearchTestMixin):
 
     def test_by_name_unreviewed(self):
         # Just the same as the above test, but with an unreviewed app.
-        self.app.status = amo.STATUS_UNREVIEWED
+        self.app.status = amo.STATUS_PENDING
         self.test_by_name_part()
 
     def test_by_deleted_app(self):
@@ -760,6 +760,17 @@ class TestAppSummary(AppSummaryTest):
         self.app.addonuser_set.add(role)
         res = self.summary()
         eq_(res.context['authors'][0].display_name, user.display_name)
+
+    def test_status(self):
+        res = self.summary()
+        assert 'Published' in pq(res.content)('.column-b dd').eq(5).text()
+
+    def test_disabled(self):
+        self.app.update(disabled_by_user=True)
+        res = self.summary()
+        text = pq(res.content)('.column-b dd').eq(5).text()
+        assert 'Published' not in text
+        assert 'disabled by user' in text
 
     def test_visible_authors(self):
         AddonUser.objects.all().delete()

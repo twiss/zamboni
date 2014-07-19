@@ -23,10 +23,9 @@ path = lambda *a: os.path.join(ROOT, *a)
 # It puts it in a dir called "workspace".  Way to be, jenkins.
 ROOT_PACKAGE = os.path.basename(ROOT)
 
-# The host currently running the site.  Only use this in code for good reason;
-# the site is designed to run on a cluster and should continue to support that
-HOSTNAME = urlparse(os.environ.get('MARKETPLACE_URL',
-                                   'http://' + socket.gethostname())).netloc
+# The server currently the app, used for logging and newrelic. This allows us
+# to tell which server a log came from.
+HOSTNAME = socket.gethostname()
 
 try:
     # If we have build ids available, we'll grab them here and add them to our
@@ -78,7 +77,10 @@ DATABASES['default']['TEST_COLLATION'] = 'utf8_general_ci'
 DEBUG = True
 DEBUG_PROPAGATE_EXCEPTIONS = True
 DEFAULT_FROM_EMAIL = 'Firefox Marketplace <nobody@mozilla.org>'
-DOMAIN = HOSTNAME
+
+# The host currently running the site, used for browserid and other lookups.
+DOMAIN = urlparse(os.environ.get('MARKETPLACE_URL',
+                                 'http://localhost')).netloc
 
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
@@ -271,6 +273,7 @@ MKT_FEEDBACK_EMAIL = 'apps-feedback@mozilla.com'
 MKT_REVIEWERS_EMAIL = 'app-reviewers@mozilla.org'
 MKT_SENIOR_EDITORS_EMAIL = 'marketplace-staff+escalations@mozilla.org'
 MKT_SUPPORT_EMAIL = 'app-reviewers@mozilla.org'
+NOBODY_EMAIL_ADDRESS = 'nobody@mozilla.org'
 NOBODY_EMAIL = 'Firefox Marketplace <nobody@mozilla.org>'
 SENIOR_EDITORS_EMAIL = 'amo-admin-reviews@mozilla.org'
 THEMES_EMAIL = 'theme-reviews@mozilla.org'
@@ -500,7 +503,7 @@ APP_PURCHASE_SECRET = 'please change this'
 # This is the typ for app purchase JWTs.
 # It must match that of the pay server that processes nav.mozPay().
 # On B2G this must match a provider in the whitelist.
-APP_PURCHASE_TYP = 'mozilla/payments/pay/v1'
+APP_PURCHASE_TYP = 'mozilla-local/payments/pay/v1'
 
 # Base URL to the Bango Vendor Portal (keep the trailing question mark).
 BANGO_BASE_PORTAL_URL = 'http://mozilla.com.test.bango.org/login/al.aspx?'
@@ -528,6 +531,7 @@ BROWSERID_DOMAIN = 'login.persona.org'
 # Adjust these settings if you need to use a custom verifier.
 BROWSERID_JS_URL = 'https://login.persona.org/include.js'
 BROWSERID_VERIFICATION_URL = 'https://verifier.login.persona.org/verify'
+BROWSERID_AUDIENCES = [SITE_URL]
 
 # Number of seconds a count() query should be cached.  Keep it short because
 # it's not possible to invalidate these queries.
@@ -689,6 +693,7 @@ ES_INDEXES = {
     'mkt_feed_brand': 'feed_brands',
     'mkt_feed_collection': 'feed_collections',
     'mkt_feed_shelf': 'feed_shelves',
+    'mkt_feed_item': 'feed_items',
     # Adding an index? Don't forget to add the indexer to ESTestCase.
     # Also add the index to reindex_mkt.py.
 }
@@ -716,7 +721,8 @@ FFMPEG_BINARY = 'ffmpeg'
 
 FXA_CLIENT_ID = '56fc6da8d185c8e3'
 FXA_CLIENT_SECRET = 'd1a8f0088e565d066c3d9f28587f5875a800e0a1618a4aaeabd00e162ac583a3'
-FXA_OAUTH_URL = 'https://oauth.dev.lcip.org'
+FXA_OAUTH_URL = 'https://oauth-marketplace.dev.lcip.org'
+
 if DEBUG:
     # In DEBUG mode, don't require HTTPS for FxA oauth redirects.
     import os
@@ -745,7 +751,7 @@ GOOGLE_TRANSLATE_REDIRECT_URL = (
 
 # Assume that locally run servers, with DEBUG to True will not want
 # their logs going to syslog.
-HAS_SYSLOG = not DEBUG
+HAS_SYSLOG = True
 
 HEKA_CONF = {
     'logger': 'zamboni',
@@ -1075,7 +1081,7 @@ SLAVE_DATABASES = []
 
 # The configuration for the client that speaks to solitude.
 # A tuple of the solitude hosts.
-SOLITUDE_HOSTS = (os.environ.get('SOLITUDE_URL', ''),)
+SOLITUDE_HOSTS = (os.environ.get('SOLITUDE_URL', 'http://localhost:2602'),)
 
 # The oAuth key and secret that solitude needs.
 SOLITUDE_KEY = ''

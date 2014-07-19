@@ -8,7 +8,6 @@ import re
 import time
 import urlparse
 import uuid
-from collections import defaultdict
 
 from django.conf import settings
 from django.core.cache import cache
@@ -42,12 +41,11 @@ from constants.applications import DEVICE_TYPES
 from constants.payments import PROVIDER_CHOICES
 from lib.crypto import packaged
 from lib.iarc.client import get_iarc_client
-from lib.iarc.utils import (get_iarc_app_title, render_xml,
-                            REVERSE_DESC_MAPPING, REVERSE_INTERACTIVES_MAPPING)
+from lib.iarc.utils import get_iarc_app_title, render_xml
 from lib.utils import static_url
 from mkt.access import acl
 from mkt.access.acl import action_allowed, check_reviewer
-from mkt.constants import APP_FEATURES, apps
+from mkt.constants import APP_FEATURES, apps, iarc_mappings
 from mkt.files.models import File, nfd_str, Platform
 from mkt.files.utils import parse_addon, WebAppParser
 from mkt.prices.models import AddonPremium, Price
@@ -61,8 +59,7 @@ from mkt.users.models import UserForeignKey, UserProfile
 from mkt.versions.models import Version
 from mkt.webapps import query, signals
 from mkt.webapps.indexers import WebappIndexer
-from mkt.webapps.utils import (dehydrate_content_rating, dehydrate_descriptors,
-                               dehydrate_interactives, get_locale_properties,
+from mkt.webapps.utils import (dehydrate_content_rating, get_locale_properties,
                                get_supported_locales)
 
 
@@ -243,7 +240,7 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
 
     authors = models.ManyToManyField('users.UserProfile', through='AddonUser',
                                      related_name='addons')
-    categories = models.ManyToManyField('Category', through='AddonCategory')
+    categories = json_field.JSONField(default=None)
     premium_type = models.PositiveIntegerField(
         choices=amo.ADDON_PREMIUM_TYPES.items(), default=amo.ADDON_FREE)
     manifest_url = models.URLField(max_length=255, blank=True, null=True)
@@ -256,7 +253,7 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
     _latest_version = models.ForeignKey(Version, db_column='latest_version',
                                         on_delete=models.SET_NULL,
                                         null=True, related_name='+')
-    make_public = models.DateTimeField(null=True)
+    publish_type = models.PositiveIntegerField(default=0)
     mozilla_contact = models.EmailField(blank=True)
 
     vip_app = models.BooleanField(default=False)
@@ -395,13 +392,12 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
                          data.get('default_locale') == addon.default_locale)
         if not locale_is_set:
             addon.default_locale = to_language(translation.get_language())
-        if addon.is_webapp():
-            addon.is_packaged = is_packaged
-            if is_packaged:
-                addon.app_domain = data.get('origin')
-            else:
-                addon.manifest_url = upload.name
-                addon.app_domain = addon.domain_from_url(addon.manifest_url)
+        addon.is_packaged = is_packaged
+        if is_packaged:
+            addon.app_domain = data.get('origin')
+        else:
+            addon.manifest_url = upload.name
+            addon.app_domain = addon.domain_from_url(addon.manifest_url)
         addon.save()
         Version.from_upload(upload, addon, platforms)
 
@@ -458,17 +454,11 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
         if self.status == amo.STATUS_PUBLIC:
             return [amo.STATUS_PUBLIC]
 
-        if self.status == amo.STATUS_PUBLIC_WAITING:
-            # For public_waiting apps, accept both public and
-            # public_waiting statuses, because the file status might be
-            # changed from PUBLIC_WAITING to PUBLIC just before the app's
-            # is.
+        if self.status == amo.STATUS_APPROVED:
+            # For approved apps, accept both public and approved statuses,
+            # because the file status might be changed from APPROVED to PUBLIC
+            # just before the app's is.
             return amo.WEBAPPS_APPROVED_STATUSES
-
-        if self.status in (amo.STATUS_LITE,
-                           amo.STATUS_LITE_AND_NOMINATED):
-            return [amo.STATUS_PUBLIC, amo.STATUS_LITE,
-                    amo.STATUS_LITE_AND_NOMINATED]
 
         return amo.VALID_STATUSES
 
@@ -506,7 +496,7 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
         current = self.get_version()
 
         try:
-            latest_qs = self.versions.exclude(files__status=amo.STATUS_BETA)
+            latest_qs = self.versions.all()
             if ignore is not None:
                 latest_qs = latest_qs.exclude(pk=ignore.pk)
             latest = latest_qs.latest()
@@ -627,12 +617,12 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
 
     @write
     def update_status(self):
-        if (self.status in [amo.STATUS_NULL, amo.STATUS_DELETED]
-            or self.is_disabled or self.is_webapp()):
+        if (self.status in [amo.STATUS_NULL, amo.STATUS_DELETED] or
+            self.is_disabled):
             return
 
         def logit(reason, old=self.status):
-            log.info('Changing add-on status [%s]: %s => %s (%s).'
+            log.info('Changing addon status [%s]: %s => %s (%s).'
                      % (self.id, old, self.status, reason))
             amo.log(amo.LOG.CHANGE_STATUS, self.get_status_display(), self)
 
@@ -645,12 +635,8 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
             logit('no versions with files')
         elif (self.status == amo.STATUS_PUBLIC and
               not versions.filter(files__status=amo.STATUS_PUBLIC).exists()):
-            if versions.filter(files__status=amo.STATUS_LITE).exists():
-                self.update(status=amo.STATUS_LITE)
-                logit('only lite files')
-            else:
-                self.update(status=amo.STATUS_UNREVIEWED)
-                logit('no reviewed files')
+            self.update(status=amo.STATUS_PENDING)
+            logit('no reviewed files')
 
     @staticmethod
     def attach_related_versions(addons, addon_dict=None):
@@ -755,18 +741,6 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
         return addon_dict
 
     @property
-    def show_beta(self):
-        return self.status == amo.STATUS_PUBLIC and self.current_beta_version
-
-    @amo.cached_property
-    def current_beta_version(self):
-        """Retrieves the latest version of an addon, in the beta channel."""
-        versions = self.versions.filter(files__status=amo.STATUS_BETA)[:1]
-
-        if versions:
-            return versions[0]
-
-    @property
     def icon_url(self):
         return self.get_icon_url(32)
 
@@ -796,51 +770,6 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
         except IndexError:
             return settings.MEDIA_URL + '/img/icons/no-preview.png'
 
-    def can_request_review(self):
-        """Return the statuses an add-on can request."""
-        if not File.objects.filter(version__addon=self):
-            return ()
-        if (self.is_disabled or
-            self.status in (amo.STATUS_PUBLIC,
-                            amo.STATUS_LITE_AND_NOMINATED,
-                            amo.STATUS_DELETED) or
-            not self.latest_version or
-            not self.latest_version.files.exclude(status=amo.STATUS_DISABLED)):
-            return ()
-        elif self.status == amo.STATUS_NOMINATED:
-            return (amo.STATUS_LITE,)
-        elif self.status == amo.STATUS_UNREVIEWED:
-            return (amo.STATUS_PUBLIC,)
-        elif self.status == amo.STATUS_LITE:
-            if self.days_until_full_nomination() == 0:
-                return (amo.STATUS_PUBLIC,)
-            else:
-                # Still in preliminary waiting period...
-                return ()
-        else:
-            return (amo.STATUS_LITE, amo.STATUS_PUBLIC)
-
-    def days_until_full_nomination(self):
-        """Returns number of days until author can request full review.
-
-        If wait period is over or this doesn't apply at all, returns 0 days.
-        An author must wait 10 days after submitting first LITE approval
-        to request FULL.
-        """
-        if self.status != amo.STATUS_LITE:
-            return 0
-        # Calculate wait time from the earliest submitted version:
-        qs = (File.objects.filter(version__addon=self, status=self.status)
-              .order_by('created').values_list('datestatuschanged'))[:1]
-        if qs:
-            days_ago = datetime.datetime.now() - qs[0][0]
-            if days_ago < datetime.timedelta(days=10):
-                return 10 - days_ago.days
-        return 0
-
-    def is_webapp(self):
-        return self.type == amo.ADDON_WEBAPP
-
     @property
     def is_disabled(self):
         """True if this Addon is disabled.
@@ -860,8 +789,8 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
     def is_public(self):
         return self.status == amo.STATUS_PUBLIC and not self.disabled_by_user
 
-    def is_public_waiting(self):
-        return self.status == amo.STATUS_PUBLIC_WAITING
+    def is_approved(self):
+        return self.status == amo.STATUS_APPROVED
 
     def is_incomplete(self):
         return self.status == amo.STATUS_NULL
@@ -930,40 +859,12 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
         """
         Get the queries used to calculate addon.last_updated.
         """
-        status_change = Max('versions__files__datestatuschanged')
-        public = (
-            Addon.objects.no_cache().filter(
-                status=amo.STATUS_PUBLIC,
-                versions__files__status=amo.STATUS_PUBLIC)
-            .exclude(type__in=(amo.ADDON_PERSONA, amo.ADDON_WEBAPP))
-            .values('id').annotate(last_updated=status_change))
-
-        lite = (
-            Addon.objects.no_cache().filter(
-                status__in=amo.LISTED_STATUSES,
-                versions__files__status=amo.STATUS_LITE)
-            .exclude(type=amo.ADDON_WEBAPP)
-            .values('id').annotate(last_updated=status_change))
-
-        stati = amo.LISTED_STATUSES + (amo.STATUS_PUBLIC,)
-        exp = (Addon.objects.no_cache().exclude(status__in=stati)
-               .filter(versions__files__status__in=amo.VALID_STATUSES)
-               .exclude(type=amo.ADDON_WEBAPP)
-               .values('id')
-               .annotate(last_updated=Max('versions__files__created')))
-
-        webapps = (Addon.objects.no_cache()
-                   .filter(type=amo.ADDON_WEBAPP,
-                           status=amo.STATUS_PUBLIC,
-                           versions__files__status=amo.STATUS_PUBLIC)
-                   .values('id')
-                   .annotate(last_updated=Max('versions__created')))
-
-        return dict(public=public, exp=exp, lite=lite, webapps=webapps)
-
-    @amo.cached_property(writable=True)
-    def all_categories(self):
-        return list(self.categories.all())
+        return (Addon.objects.no_cache()
+                .filter(type=amo.ADDON_WEBAPP,
+                        status=amo.STATUS_PUBLIC,
+                        versions__files__status=amo.STATUS_PUBLIC)
+                .values('id')
+                .annotate(last_updated=Max('versions__created')))
 
     @amo.cached_property(writable=True)
     def all_previews(self):
@@ -1210,15 +1111,6 @@ def attach_prices(addons):
         addon_dict[addon].price = price
 
 
-def attach_categories(addons):
-    """Put all of the add-on's categories into a category_ids list."""
-    addon_dict = dict((a.id, a) for a in addons)
-    categories = (Category.objects.filter(addoncategory__addon__in=addon_dict)
-                  .values_list('addoncategory__addon', 'id'))
-    for addon, cats in sorted_groupby(categories, lambda x: x[0]):
-        addon_dict[addon].category_ids = [c[1] for c in cats]
-
-
 def attach_translations(addons):
     """Put all translations into a translations dict."""
     attach_trans_dict(Addon, addons)
@@ -1230,19 +1122,6 @@ def attach_tags(addons):
           .values_list('addons__id', 'tag_text'))
     for addon, tags in sorted_groupby(qs, lambda x: x[0]):
         addon_dict[addon].tag_list = [t[1] for t in tags]
-
-
-class AddonCategory(caching.CachingMixin, models.Model):
-    addon = models.ForeignKey(Addon)
-    category = models.ForeignKey('Category')
-    feature = models.BooleanField(default=False)
-    feature_locales = models.CharField(max_length=255, default='', null=True)
-
-    objects = caching.CachingManager()
-
-    class Meta:
-        db_table = 'addons_categories'
-        unique_together = ('addon', 'category')
 
 
 class AddonType(amo.models.ModelBase):
@@ -1287,67 +1166,6 @@ class AddonUser(caching.CachingMixin, models.Model):
         db_table = 'addons_users'
 
 
-class Category(amo.models.OnChangeMixin, amo.models.ModelBase):
-    name = TranslatedField()
-    slug = amo.models.SlugField(max_length=50,
-                                help_text='Used in Category URLs.')
-    type = models.PositiveIntegerField(db_column='addontype_id',
-                                       choices=do_dictsort(amo.ADDON_TYPE))
-    count = models.IntegerField('Addon count', default=0)
-    weight = models.IntegerField(
-        default=0, help_text='Category weight used in sort ordering')
-    misc = models.BooleanField(default=False)
-
-    addons = models.ManyToManyField(Addon, through='AddonCategory')
-
-    class Meta:
-        db_table = 'categories'
-        verbose_name_plural = 'Categories'
-
-    def __unicode__(self):
-        return unicode(self.name)
-
-    def get_url_path(self):
-        return '/search?cat=%s' % self.slug
-
-    @staticmethod
-    def transformer(addons):
-        qs = (Category.objects.no_cache().filter(addons__in=addons)
-              .extra(select={'addon_id': 'addons_categories.addon_id'}))
-        cats = dict((addon_id, list(cs))
-                    for addon_id, cs in sorted_groupby(qs, 'addon_id'))
-        for addon in addons:
-            addon.all_categories = cats.get(addon.id, [])
-
-    def clean(self):
-        if self.slug.isdigit():
-            raise ValidationError('Slugs cannot be all numbers.')
-
-
-@Category.on_change
-def reindex_cat_slug(old_attr=None, new_attr=None, instance=None,
-                     sender=None, **kw):
-    """ES reindex category's apps if category slug changes."""
-    from mkt.webapps.tasks import index_webapps
-
-    if new_attr.get('type') != amo.ADDON_WEBAPP:
-        instance.save()
-        return
-
-    slug_changed = (instance.pk is not None and old_attr and new_attr and
-                    old_attr.get('slug') != new_attr.get('slug'))
-
-    instance.save()
-
-    if slug_changed:
-        index_webapps(list(instance.addon_set.filter(type=amo.ADDON_WEBAPP)
-                           .values_list('id', flat=True)))
-
-
-dbsignals.pre_save.connect(save_signal, sender=Category,
-                           dispatch_uid='category_translations')
-
-
 class Preview(amo.models.ModelBase):
     addon = models.ForeignKey(Addon, related_name='previews')
     filetype = models.CharField(max_length=25)
@@ -1363,6 +1181,9 @@ class Preview(amo.models.ModelBase):
 
     def _image_url(self, url_template):
         if self.modified is not None:
+            if isinstance(self.modified, unicode):
+                self.modified = datetime.datetime.strptime(self.modified,
+                                                           '%Y-%m-%dT%H:%M:%S')
             modified = int(time.mktime(self.modified.timetuple()))
         else:
             modified = 0
@@ -1547,9 +1368,7 @@ class WebappManager(amo.models.ManagerBase):
 
     def rated(self):
         """IARC."""
-        if waffle.switch_is_active('iarc'):
-            return self.exclude(content_ratings__isnull=True)
-        return self
+        return self.exclude(content_ratings__isnull=True)
 
     def by_identifier(self, identifier):
         """
@@ -1595,6 +1414,10 @@ class Webapp(Addon):
             if not hasattr(self, '_geodata'):
                 Geodata.objects.create(addon=self)
 
+    @classmethod
+    def get_indexer(cls):
+        return WebappIndexer
+
     @staticmethod
     def transformer(apps):
         if not apps:
@@ -1602,8 +1425,8 @@ class Webapp(Addon):
         apps_dict = dict((a.id, a) for a in apps)
 
         # Only the parts relevant for Webapps are copied over from Addon. In
-        # particular this avoids fetching categories and listed_authors, which
-        # isn't useful in most parts of the Marketplace.
+        # particular this avoids fetching listed_authors, which isn't useful
+        # in most parts of the Marketplace.
 
         # Set _latest_version, _current_version
         Addon.attach_related_versions(apps, apps_dict)
@@ -1653,15 +1476,6 @@ class Webapp(Addon):
             app.all_versions = v_dict.get(app.id, [])
 
         return apps
-
-    @staticmethod
-    def indexing_transformer(apps):
-        """Attach everything we need to index apps."""
-        transforms = (attach_categories, attach_devices, attach_prices,
-                      attach_tags, attach_translations)
-        for t in transforms:
-            qs = apps.transform(t)
-        return qs
 
     @property
     def geodata(self):
@@ -1850,7 +1664,7 @@ class Webapp(Addon):
         if not self.device_types:
             reasons.append(_('You must provide at least one device type.'))
 
-        if not self.categories.count():
+        if not self.categories:
             reasons.append(_('You must provide at least one category.'))
         if not self.previews.count():
             reasons.append(_('You must upload at least one screenshot or '
@@ -1865,10 +1679,6 @@ class Webapp(Addon):
 
     def is_rated(self):
         return self.content_ratings.exists()
-
-    def content_ratings_complete(self):
-        """Checks for waffle."""
-        return not waffle.switch_is_active('iarc') or self.is_rated()
 
     def all_payment_accounts(self):
         # TODO: cache this somehow. Using @cached_property was hard because
@@ -1921,7 +1731,7 @@ class Webapp(Addon):
 
         if not self.details_complete():
             errors['details'] = self.details_errors()
-        if not ignore_ratings and not self.content_ratings_complete():
+        if not ignore_ratings and not self.is_rated():
             errors['content_ratings'] = _('You must set up content ratings.')
         if not self.payments_complete():
             errors['payments'] = _('You must set up a payment account.')
@@ -1953,7 +1763,7 @@ class Webapp(Addon):
                                  'fully completed.'),
                 'url': self.get_dev_url(),
             }
-        elif not self.content_ratings_complete():
+        elif not self.is_rated():
             return {
                 'name': _('Content Ratings'),
                 'description': _('This app needs to get a content rating.'),
@@ -2198,11 +2008,7 @@ class Webapp(Addon):
         if region:
             listed.append(region.id in self.get_region_ids(restofworld=True))
         if category:
-            if isinstance(category, basestring):
-                filters = {'slug': category}
-            else:
-                filters = {'id': category.id}
-            listed.append(self.category_set.filter(**filters).exists())
+            listed.append(category in (self.categories or []))
         return all(listed or [False])
 
     def content_ratings_in(self, region, category=None):
@@ -2263,14 +2069,6 @@ class Webapp(Addon):
 
         return srch
 
-    @classmethod
-    def category(cls, slug):
-        try:
-            return (Category.objects
-                    .filter(type=amo.ADDON_WEBAPP, slug=slug))[0]
-        except IndexError:
-            return None
-
     def in_rereview_queue(self):
         return self.rereviewqueue_set.exists()
 
@@ -2320,6 +2118,13 @@ class Webapp(Addon):
             # available it can get picked up correctly.
             return '{}'
         else:
+            # This will sign the package if it isn't already.
+            #
+            # Ensure that the calling method checks various permissions if
+            # needed. E.g. see mkt/detail/views.py. This is also called as a
+            # task after reviewer approval so we can't perform some checks
+            # here.
+            signed_file_path = packaged.sign(version.pk)
             file_obj = version.all_files[0]
             manifest = self.get_manifest_json(file_obj)
             package_path = absolutify(
@@ -2329,7 +2134,7 @@ class Webapp(Addon):
             data = {
                 'name': manifest['name'],
                 'version': version.version,
-                'size': storage.size(file_obj.signed_file_path),
+                'size': storage.size(signed_file_path),
                 'release_notes': version.releasenotes,
                 'package_path': package_path,
             }
@@ -2550,88 +2355,6 @@ class Webapp(Addon):
 
         return content_ratings
 
-    def get_descriptors_slugs(self):
-        """
-        Return list of content descriptor slugs (e.g., ['has_esrb_drugs'...]).
-        """
-        try:
-            app_descriptors = self.rating_descriptors
-        except RatingDescriptors.DoesNotExist:
-            return []
-
-        descriptors = []
-        for key in mkt.ratingdescriptors.RATING_DESCS.keys():
-            field = 'has_%s' % key.lower()  # Build the field name.
-            if getattr(app_descriptors, field):
-                descriptors.append(key)
-
-        return descriptors
-
-    def get_interactives_slugs(self):
-        """
-        Return list of interactive element slugs (e.g., ['shares_info'...]).
-        """
-        try:
-            app_interactives = self.rating_interactives
-        except RatingInteractives.DoesNotExist:
-            return []
-
-        interactives = []
-        for key in mkt.ratinginteractives.RATING_INTERACTIVES.keys():
-            field = 'has_%s' % key.lower()
-            if getattr(app_interactives, field):
-                interactives.append(key)
-
-        return interactives
-
-    def get_descriptors_dehydrated(self):
-        """
-        Return lists of descriptors slugs by body
-        (e.g., {'esrb': ['real-gambling'], 'pegi': ['scary']}).
-        """
-        return dehydrate_descriptors(self.get_descriptors_slugs())
-
-    def get_interactives_dehydrated(self):
-        """
-        Return lists of interactive element slugs
-        (e.g., ['shares-info', 'shares-location']).
-        """
-        return dehydrate_interactives(self.get_interactives_slugs())
-
-    def get_descriptors_full(self):
-        """
-        Return descriptor objects (label, name) by body.
-        (e.g., {'esrb': {'label': 'blood', 'name': 'Blood'}}).
-        """
-        keys = self.get_descriptors_slugs()
-        results = defaultdict(list)
-        for key in keys:
-            obj = mkt.ratingdescriptors.RATING_DESCS.get(key)
-            if obj:
-                # Slugify and remove body prefix.
-                body, label = key.lower().replace('_', '-').split('-', 1)
-                results[body].append({
-                    'label': label,
-                    'name': unicode(obj['name']),
-                })
-        return dict(results)
-
-    def get_interactives_full(self):
-        """
-        Return list of interactive element objects (label, name).
-        e.g., [{'label': 'social-networking', 'name': 'Facebocks'}, ...].
-        """
-        keys = self.get_interactives_slugs()
-        results = []
-        for key in keys:
-            obj = mkt.ratinginteractives.RATING_INTERACTIVES.get(key)
-            if obj:
-                results.append({
-                    'label': key.lower().replace('_', '-'),
-                    'name': unicode(obj['name']),
-                })
-        return results
-
     def set_iarc_info(self, submission_id, security_code):
         """
         Sets the iarc_info for this app.
@@ -2705,19 +2428,12 @@ class Webapp(Addon):
         """
         Sets IARC rating descriptors on this app.
 
-        This overwrites or creates elements, it doesn't delete and expects data
-        of the form:
-
-            [<has_descriptor_1>, <has_descriptor_6>]
-
+        data -- list of database flags ('has_usk_lang')
         """
-        log.info('IARC setting descriptors for app:%s:%s' %
-                 (self.id, self.app_slug))
-
         create_kwargs = {}
-        for desc in mkt.ratingdescriptors.RATING_DESCS.keys():
-            has_desc_attr = 'has_%s' % desc.lower()
-            create_kwargs[has_desc_attr] = has_desc_attr in data
+        for body in mkt.iarc_mappings.DESCS:
+            for desc, db_flag in mkt.iarc_mappings.DESCS[body].items():
+                create_kwargs[db_flag] = db_flag in data
 
         rd, created = RatingDescriptors.objects.get_or_create(
             addon=self, defaults=create_kwargs)
@@ -2725,39 +2441,24 @@ class Webapp(Addon):
             rd.update(modified=datetime.datetime.now(),
                       **create_kwargs)
 
-        log.info('IARC descriptors set for app:%s:%s' %
-                 (self.id, self.app_slug))
-
     @write
     def set_interactives(self, data):
         """
         Sets IARC interactive elements on this app.
 
-        This overwrites or creates elements, it doesn't delete and expects data
-        of the form:
-
-            [<has_interactive_1>, <has_interactive name 2>]
-
+        data -- list of database flags ('has_users_interact')
         """
         create_kwargs = {}
-        for interactive in mkt.ratinginteractives.RATING_INTERACTIVES.keys():
-            interactive = 'has_%s' % interactive.lower()
-            create_kwargs[interactive] = interactive in map(
-                lambda x: x.lower(), data)
+        for interactive, db_flag in mkt.iarc_mappings.INTERACTIVES.items():
+            create_kwargs[db_flag] = db_flag in data
 
         ri, created = RatingInteractives.objects.get_or_create(
             addon=self, defaults=create_kwargs)
         if not created:
             ri.update(**create_kwargs)
 
-        log.info('IARC interactive elements set for app:%s:%s' %
-                 (self.id, self.app_slug))
-
     def set_iarc_storefront_data(self, disable=False):
         """Send app data to IARC for them to verify."""
-        if not waffle.switch_is_active('iarc'):
-            return
-
         try:
             iarc_info = self.iarc_info
         except IARCInfo.DoesNotExist:
@@ -2882,7 +2583,8 @@ def watch_status(old_attr={}, new_attr={}, instance=None, sender=None, **kw):
             '[Webapp:{id}] Status changed from {old_status}:{old_status_name} '
             'to {new_status}:{new_status_name}'.format(
                 id=addon.id, old_status=old_status,
-                old_status_name=amo.STATUS_CHOICES_API[old_status],
+                old_status_name=amo.STATUS_CHOICES_API.get(old_status,
+                                                           'unknown'),
                 new_status=new_status,
                 new_status_name=amo.STATUS_CHOICES_API[new_status]))
 
@@ -3055,8 +2757,7 @@ class ContentRating(amo.models.ModelBase):
         """Gives us a list of Region classes that use this rating body."""
         # All regions w/o specified ratings bodies fallback to Generic.
         generic_regions = []
-        if (waffle.switch_is_active('iarc') and
-            self.get_body_class() == mkt.ratingsbodies.GENERIC):
+        if self.get_body_class() == mkt.ratingsbodies.GENERIC:
             generic_regions = mkt.regions.ALL_REGIONS_WITHOUT_CONTENT_RATINGS()
 
         return ([x for x in mkt.regions.ALL_REGIONS_WITH_CONTENT_RATINGS()
@@ -3065,8 +2766,7 @@ class ContentRating(amo.models.ModelBase):
 
     def get_region_slugs(self):
         """Gives us the region slugs that use this rating body."""
-        if (waffle.switch_is_active('iarc') and
-            self.get_body_class() == mkt.ratingsbodies.GENERIC):
+        if self.get_body_class() == mkt.ratingsbodies.GENERIC:
             # For the generic rating body, we just pigeonhole all of the misc.
             # regions into one region slug, GENERIC. Reduces redundancy in the
             # final data structure. Rather than
@@ -3114,7 +2814,6 @@ class RatingDescriptors(amo.models.ModelBase, DynamicBoolFieldsMixin):
     stating if an app is rated with a particular descriptor.
     """
     addon = models.OneToOneField(Addon, related_name='rating_descriptors')
-    field_source = mkt.ratingdescriptors.RATING_DESCS
 
     class Meta:
         db_table = 'webapps_rating_descriptors'
@@ -3122,17 +2821,22 @@ class RatingDescriptors(amo.models.ModelBase, DynamicBoolFieldsMixin):
     def __unicode__(self):
         return u'%s: %s' % (self.id, self.addon.name)
 
+    def to_keys_by_body(self, body):
+        return [key for key in self.to_keys() if
+                key.startswith('has_%s' % body)]
+
     def iarc_deserialize(self, body=None):
         """Map our descriptor strings back to the IARC ones (comma-sep.)."""
         keys = self.to_keys()
         if body:
             keys = [key for key in keys if body.iarc_name.lower() in key]
-        return ', '.join(REVERSE_DESC_MAPPING.get(desc) for desc in keys)
+        return ', '.join(iarc_mappings.REVERSE_DESCS.get(desc) for desc
+                         in keys)
 
 # Add a dynamic field to `RatingDescriptors` model for each rating descriptor.
-for k, v in mkt.ratingdescriptors.RATING_DESCS.iteritems():
-    field = models.BooleanField(default=False, help_text=v['name'])
-    field.contribute_to_class(RatingDescriptors, 'has_%s' % k.lower())
+for db_flag, desc in mkt.iarc_mappings.REVERSE_DESCS.items():
+    field = models.BooleanField(default=False, help_text=desc)
+    field.contribute_to_class(RatingDescriptors, db_flag)
 
 
 # The RatingInteractives table is created with dynamic fields based on
@@ -3143,7 +2847,6 @@ class RatingInteractives(amo.models.ModelBase, DynamicBoolFieldsMixin):
     stating if an app features a particular interactive element.
     """
     addon = models.OneToOneField(Addon, related_name='rating_interactives')
-    field_source = mkt.ratinginteractives.RATING_INTERACTIVES
 
     class Meta:
         db_table = 'webapps_rating_interactives'
@@ -3153,14 +2856,14 @@ class RatingInteractives(amo.models.ModelBase, DynamicBoolFieldsMixin):
 
     def iarc_deserialize(self):
         """Map our descriptor strings back to the IARC ones (comma-sep.)."""
-        return ', '.join(REVERSE_INTERACTIVES_MAPPING.get(inter)
+        return ', '.join(iarc_mappings.REVERSE_INTERACTIVES.get(inter)
                          for inter in self.to_keys())
 
 
 # Add a dynamic field to `RatingInteractives` model for each rating descriptor.
-for k, v in mkt.ratinginteractives.RATING_INTERACTIVES.iteritems():
-    field = models.BooleanField(default=False, help_text=v['name'])
-    field.contribute_to_class(RatingInteractives, 'has_%s' % k.lower())
+for interactive, db_flag in mkt.iarc_mappings.INTERACTIVES.items():
+    field = models.BooleanField(default=False, help_text=interactive)
+    field.contribute_to_class(RatingInteractives, db_flag)
 
 
 def iarc_cleanup(*args, **kwargs):
@@ -3233,6 +2936,13 @@ class AppFeatures(amo.models.ModelBase, DynamicBoolFieldsMixin):
                           for f in self._fields())
         return '%x.%s.%s' % (int(profile, 2), len(profile),
                              settings.APP_FEATURES_VERSION)
+
+    def to_list(self):
+        keys = self.to_keys()
+        # Strip `has_` from each feature.
+        field_names = [self.field_source[key[4:].upper()]['name']
+                       for key in keys]
+        return sorted(field_names)
 
 
 # Add a dynamic field to `AppFeatures` model for each buchet feature.

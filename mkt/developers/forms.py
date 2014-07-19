@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import mimetypes
 import os
 from datetime import datetime
 from zipfile import ZipFile
@@ -28,7 +29,7 @@ from amo.utils import remove_icons, slug_validator, slugify
 from lib.video import tasks as vtasks
 from mkt.access import acl
 from mkt.api.models import Access
-from mkt.constants import MAX_PACKAGED_APP_SIZE
+from mkt.constants import CATEGORY_CHOICES, MAX_PACKAGED_APP_SIZE
 from mkt.files.models import FileUpload
 from mkt.files.utils import WebAppParser
 from mkt.regions import REGIONS_CHOICES_SORTED_BY_NAME
@@ -42,10 +43,10 @@ from mkt.translations.models import Translation
 from mkt.translations.widgets import TranslationTextarea, TransTextarea
 from mkt.versions.models import Version
 from mkt.webapps.forms import clean_slug, clean_tags, icons
-from mkt.webapps.models import (Addon, AddonUser, BlacklistedSlug, Category,
-                                IARCInfo, Preview, Webapp)
+from mkt.webapps.models import (Addon, AddonUser, BlacklistedSlug, IARCInfo,
+                                Preview, Webapp)
 from mkt.webapps.tasks import index_webapps, update_manifests
-from mkt.webapps.widgets import CategoriesSelectMultiple, IconWidgetRenderer
+from mkt.webapps.widgets import IconWidgetRenderer
 
 from . import tasks
 
@@ -496,7 +497,7 @@ class NewPackagedAppForm(happyforms.Form):
 
         # Everything passed validation.
         self.file_upload = FileUpload.from_post(
-            upload, upload.name, upload.size, is_webapp=True)
+            upload, upload.name, upload.size)
         self.file_upload.user = self.user
         self.file_upload.save()
 
@@ -512,8 +513,7 @@ class NewPackagedAppForm(happyforms.Form):
         }
 
         self.file_upload = FileUpload.objects.create(
-                is_webapp=True, user=self.user,
-                name=getattr(upload, 'name', ''),
+                user=self.user, name=getattr(upload, 'name', ''),
                 validation=json.dumps(validation))
 
         # Return a ValidationError to be raised by the view.
@@ -558,10 +558,9 @@ class AppFormBasic(AddonFormBase):
         fields = ('slug', 'manifest_url', 'description')
 
     def __init__(self, *args, **kw):
-        # Force the form to use app_slug if this is a webapp. We want to keep
+        # Force the form to use app_slug. We want to keep
         # this under "slug" so all the js continues to work.
-        if kw['instance'].is_webapp():
-            kw.setdefault('initial', {})['slug'] = kw['instance'].app_slug
+        kw.setdefault('initial', {})['slug'] = kw['instance'].app_slug
 
         super(AppFormBasic, self).__init__(*args, **kw)
 
@@ -890,17 +889,17 @@ class RegionForm(forms.Form):
 
 
 class CategoryForm(happyforms.Form):
-    categories = forms.ModelMultipleChoiceField(
-        queryset=Category.objects.filter(type=amo.ADDON_WEBAPP),
-        widget=CategoriesSelectMultiple)
+    categories = forms.MultipleChoiceField(label=_lazy(u'Categories'),
+                                           choices=CATEGORY_CHOICES,
+                                           widget=forms.CheckboxSelectMultiple)
 
     def __init__(self, *args, **kw):
         self.request = kw.pop('request', None)
         self.product = kw.pop('product', None)
         super(CategoryForm, self).__init__(*args, **kw)
 
-        self.cats_before = list(
-            self.product.categories.values_list('id', flat=True))
+        self.cats_before = (list(self.product.categories) 
+                            if self.product.categories else [])
 
         self.initial['categories'] = self.cats_before
 
@@ -909,8 +908,7 @@ class CategoryForm(happyforms.Form):
 
     def clean_categories(self):
         categories = self.cleaned_data['categories']
-        set_categories = set(categories.values_list('id', flat=True))
-
+        set_categories = set(categories)
         total = len(set_categories)
         max_cat = amo.MAX_CATEGORIES
 
@@ -924,20 +922,8 @@ class CategoryForm(happyforms.Form):
         return categories
 
     def save(self):
-        after = list(self.cleaned_data['categories']
-                     .values_list('id', flat=True))
-        before = self.cats_before
-
-        # Add new categories.
-        to_add = set(after) - set(before)
-        for c in to_add:
-            self.product.addoncategory_set.create(category_id=c)
-
-        # Remove old categories.
-        to_remove = set(before) - set(after)
-        self.product.addoncategory_set.filter(
-            category_id__in=to_remove).delete()
-
+        after = list(self.cleaned_data['categories'])
+        self.product.update(categories=after)
         toggle_app_for_special_regions(self.request, self.product)
 
 
@@ -1048,18 +1034,18 @@ class AppVersionForm(happyforms.ModelForm):
     def __init__(self, *args, **kwargs):
         super(AppVersionForm, self).__init__(*args, **kwargs)
         self.fields['publish_immediately'].initial = (
-            self.instance.addon.make_public == amo.PUBLIC_IMMEDIATELY)
+            self.instance.addon.publish_type == amo.PUBLISH_IMMEDIATE)
 
     def save(self, *args, **kwargs):
         rval = super(AppVersionForm, self).save(*args, **kwargs)
         if self.instance.all_files[0].status == amo.STATUS_PENDING:
-            # If version is pending, allow changes to make_public, which lives
+            # If version is pending, allow changes to publish_type, which lives
             # on the app itself.
             if self.cleaned_data.get('publish_immediately'):
-                make_public = amo.PUBLIC_IMMEDIATELY
+                publish_type = amo.PUBLISH_IMMEDIATE
             else:
-                make_public = amo.PUBLIC_WAIT
-            self.instance.addon.update(make_public=make_public)
+                publish_type = amo.PUBLISH_PRIVATE
+            self.instance.addon.update(publish_type=publish_type)
         return rval
 
 
@@ -1078,17 +1064,21 @@ class PreloadTestPlanForm(happyforms.Form):
 
     def clean(self):
         """Validate test_plan file."""
-        content_types = ['application/pdf',
-                         'application/vnd.pdf',
-                         'application/ms-excel',
-                         'application/vnd.ms-excel']
+        content_types = [
+            'application/pdf',
+            'application/vnd.pdf',
+            'application/ms-excel',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.'
+            'sheet'
+        ]
         max_upload_size = 2621440  # 2.5MB
 
         if 'test_plan' not in self.files:
             raise forms.ValidationError(_('Test plan required.'))
 
         file = self.files['test_plan']
-        content_type = file.content_type
+        content_type = mimetypes.guess_type(file.name)[0]
 
         if content_type in content_types:
             if file._size > max_upload_size:

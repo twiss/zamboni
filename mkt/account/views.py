@@ -25,7 +25,8 @@ from mkt.users.models import UserProfile
 from mkt.users.views import browserid_authenticate
 
 from mkt.account.serializers import (AccountSerializer, FeedbackSerializer,
-                                     LoginSerializer, NewsletterSerializer,
+                                     FxaLoginSerializer, LoginSerializer,
+                                     NewsletterSerializer,
                                      PermissionsSerializer)
 from mkt.api.authentication import (RestAnonymousAuthentication,
                                     RestOAuthAuthentication,
@@ -33,6 +34,7 @@ from mkt.api.authentication import (RestAnonymousAuthentication,
 from mkt.api.authorization import AllowSelf, AllowOwner
 from mkt.api.base import CORSMixin, MarketplaceView
 from mkt.constants.apps import INSTALL_TYPE_USER
+from mkt.users.views import _fxa_authorize, get_fxa_session
 from mkt.webapps.serializers import SimpleAppSerializer
 from mkt.webapps.models import Webapp
 
@@ -138,21 +140,60 @@ class FeedbackView(CORSMixin, CreateAPIViewWithoutModel):
         return context_data
 
 
+def commonplace_token(email):
+    unique_id = uuid.uuid4().hex
+
+    consumer_id = hashlib.sha1(
+        email + settings.SECRET_KEY).hexdigest()
+
+    hm = hmac.new(
+        unique_id + settings.SECRET_KEY,
+        consumer_id, hashlib.sha512)
+
+    return ','.join((email, hm.hexdigest(), unique_id))
+
+
+class FxaLoginView(CORSMixin, CreateAPIViewWithoutModel):
+    authentication_classes = []
+    serializer_class = FxaLoginSerializer
+
+    def create_action(self, request, serializer):
+        session = get_fxa_session(state=serializer.data['state'])
+        profile = _fxa_authorize(
+            session,
+            settings.FXA_CLIENT_SECRET,
+            request,
+            serializer.data['auth_response'])
+        if profile is None:
+            raise AuthenticationFailed('No profile.')
+
+        request.user, request.amo_user = profile, profile
+        request.groups = profile.groups.all()
+        # We want to return completely custom data, not the serializer's.
+        data = {
+            'error': None,
+            'token': commonplace_token(request.amo_user.email),
+            'settings': {
+                'display_name': request.amo_user.display_name,
+                'email': request.amo_user.email,
+            }
+        }
+        # Serializers give up if they aren't passed an instance, so we
+        # do that here despite PermissionsSerializer not needing one
+        # really.
+        permissions = PermissionsSerializer(context={'request': request},
+                                            instance=True)
+        data.update(permissions.data)
+
+        # Add ids of installed/purchased/developed apps.
+        data['apps'] = user_relevant_apps(profile)
+
+        return data
+
+
 class LoginView(CORSMixin, CreateAPIViewWithoutModel):
     authentication_classes = []
     serializer_class = LoginSerializer
-
-    def get_token(self, email):
-        unique_id = uuid.uuid4().hex
-
-        consumer_id = hashlib.sha1(
-            email + settings.SECRET_KEY).hexdigest()
-
-        hm = hmac.new(
-            unique_id + settings.SECRET_KEY,
-            consumer_id, hashlib.sha512)
-
-        return ','.join((email, hm.hexdigest(), unique_id))
 
     def create_action(self, request, serializer):
         with statsd.timer('auth.browserid.verify'):
@@ -178,7 +219,7 @@ class LoginView(CORSMixin, CreateAPIViewWithoutModel):
         # We want to return completely custom data, not the serializer's.
         data = {
             'error': None,
-            'token': self.get_token(request.amo_user.email),
+            'token': commonplace_token(request.amo_user.email),
             'settings': {
                 'display_name': request.amo_user.display_name,
                 'email': request.amo_user.email,

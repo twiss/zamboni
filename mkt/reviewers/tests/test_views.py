@@ -36,7 +36,7 @@ from mkt.abuse.models import AbuseReport
 from mkt.access.models import Group, GroupUser
 from mkt.api.tests.test_oauth import RestOAuth
 from mkt.comm.utils import create_comm_note
-from mkt.constants import comm
+from mkt.constants import comm, MANIFEST_CONTENT_TYPE
 from mkt.constants.features import FeatureProfile
 from mkt.developers.models import ActivityLog, ActivityLogAttachment, AppLog
 from mkt.files.models import File
@@ -415,7 +415,7 @@ class TestAppQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
         eq_(r.status_code, 200)
         actions = pq(r.content)('#review-actions input')
         expected = [
-            (u'Push to public', 'public'),
+            (u'Approve', 'public'),
             (u'Reject', 'reject'),
             (u'Escalate', 'escalate'),
             (u'Request more information', 'info'),
@@ -431,7 +431,7 @@ class TestAppQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
         eq_(r.status_code, 200)
         actions = pq(r.content)('#review-actions input')
         expected = [
-            (u'Push to public', 'public'),
+            (u'Approve', 'public'),
             (u'Escalate', 'escalate'),
             (u'Request more information', 'info'),
             (u'Comment', 'comment'),
@@ -461,7 +461,7 @@ class TestAppQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
         eq_(r.status_code, 200)
         actions = pq(r.content)('#review-actions input')
         expected = [
-            (u'Push to public', 'public'),
+            (u'Approve', 'public'),
             (u'Reject', 'reject'),
             (u'Disable app', 'disable'),
             (u'Escalate', 'escalate'),
@@ -544,7 +544,7 @@ class TestRegionQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
         self.apps = [app_factory(name='WWW',
                                  status=amo.STATUS_PUBLIC),
                      app_factory(name='XXX',
-                                 status=amo.STATUS_PUBLIC_WAITING),
+                                 status=amo.STATUS_APPROVED),
                      app_factory(name='YYY',
                                  status=amo.STATUS_PUBLIC),
                      app_factory(name='ZZZ',
@@ -666,7 +666,7 @@ class TestRereviewQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
         eq_(r.status_code, 200)
         actions = pq(r.content)('#review-actions input')
         expected = [
-            (u'Push to public', 'public'),
+            (u'Approve', 'public'),
             (u'Clear Re-review', 'clear_rereview'),
             (u'Escalate', 'escalate'),
             (u'Request more information', 'info'),
@@ -796,7 +796,7 @@ class TestUpdateQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
         eq_(r.status_code, 200)
         actions = pq(r.content)('#review-actions input')
         expected = [
-            (u'Push to public', 'public'),
+            (u'Approve', 'public'),
             (u'Escalate', 'escalate'),
             (u'Request more information', 'info'),
             (u'Comment', 'comment'),
@@ -863,9 +863,9 @@ class TestUpdateQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
             'Unexpected: Found a new packaged app in the updates queue.')
         eq_(pq(res.content)('.tabnav li a:eq(2)').text(), u'Updates (2)')
 
-    def test_public_waiting_update_in_queue(self):
+    def test_approved_update_in_queue(self):
         app = app_factory(is_packaged=True, name='YYY',
-                          status=amo.STATUS_PUBLIC_WAITING,
+                          status=amo.STATUS_APPROVED,
                           version_kw={'version': '1.0',
                                       'created': self.days_ago(2),
                                       'nomination': self.days_ago(2)})
@@ -892,7 +892,7 @@ class TestUpdateQueue(AppReviewerTest, AccessMixin, FlagsMixin, SearchMixin,
                         file_kw={'status': amo.STATUS_PENDING})
 
         # Now that we have a version with nomination=None, reset app status.
-        app.update(status=amo.STATUS_PUBLIC_WAITING)
+        app.update(status=amo.STATUS_APPROVED)
         File.objects.filter(version=first_version).update(status=app.status)
 
         # Safeguard: we /really/ want to test with nomination=None.
@@ -1056,7 +1056,7 @@ class TestEscalationQueue(AppReviewerTest, AccessMixin, FlagsMixin,
         eq_(r.status_code, 200)
         actions = pq(r.content)('#review-actions input')
         expected = [
-            (u'Push to public', 'public'),
+            (u'Approve', 'public'),
             (u'Disable app', 'disable'),
             (u'Clear Escalation', 'clear_escalation'),
             (u'Request more information', 'info'),
@@ -1162,7 +1162,6 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
 
     def setUp(self):
         super(TestReviewApp, self).setUp()
-        self.create_switch('iarc', db=True)
 
         self.mozilla_contact = 'contact@mozilla.com'
         self.app = self.get_app()
@@ -1290,15 +1289,15 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
                                        device_type=amo.DEVICE_DESKTOP.id)
         AddonDeviceType.objects.create(addon=self.app,
                                        device_type=amo.DEVICE_TABLET.id)
-        eq_(self.app.make_public, amo.PUBLIC_IMMEDIATELY)
+        eq_(self.app.publish_type, amo.PUBLISH_IMMEDIATE)
         data = {'action': 'public', 'device_types': '', 'browsers': '',
                 'comments': 'something',
                 'device_override': [amo.DEVICE_DESKTOP.id]}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
         app = self.get_app()
-        eq_(app.make_public, amo.PUBLIC_WAIT)
-        eq_(app.status, amo.STATUS_PUBLIC_WAITING)
+        eq_(app.publish_type, amo.PUBLISH_PRIVATE)
+        eq_(app.status, amo.STATUS_APPROVED)
         eq_([o.id for o in app.device_types], [amo.DEVICE_DESKTOP.id])
         self._check_log(amo.LOG.REVIEW_DEVICE_OVERRIDE)
 
@@ -1315,14 +1314,14 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
                                        device_type=amo.DEVICE_DESKTOP.id)
         AddonDeviceType.objects.create(addon=self.app,
                                        device_type=amo.DEVICE_TABLET.id)
-        eq_(self.app.make_public, amo.PUBLIC_IMMEDIATELY)
+        eq_(self.app.publish_type, amo.PUBLISH_IMMEDIATE)
         data = {'action': 'reject', 'device_types': '', 'browsers': '',
                 'comments': 'something',
                 'device_override': [amo.DEVICE_DESKTOP.id]}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
         app = self.get_app()
-        eq_(app.make_public, amo.PUBLIC_IMMEDIATELY)
+        eq_(app.publish_type, amo.PUBLISH_IMMEDIATE)
         eq_(app.status, amo.STATUS_REJECTED)
         eq_(set([o.id for o in app.device_types]),
             set([amo.DEVICE_DESKTOP.id, amo.DEVICE_TABLET.id]))
@@ -1341,8 +1340,8 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         self.post(data)
         app = self.get_app()
         assert app.current_version.features.has_sms
-        eq_(app.make_public, amo.PUBLIC_WAIT)
-        eq_(app.status, amo.STATUS_PUBLIC_WAITING)
+        eq_(app.publish_type, amo.PUBLISH_PRIVATE)
+        eq_(app.status, amo.STATUS_APPROVED)
         self._check_log(amo.LOG.REVIEW_FEATURES_OVERRIDE)
 
         # A reviewer changing features shouldn't generate a re-review.
@@ -1358,7 +1357,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         assert not self.app.latest_version.features.has_sms
         self.post(data)
         app = self.get_app()
-        eq_(app.make_public, amo.PUBLIC_IMMEDIATELY)
+        eq_(app.publish_type, amo.PUBLISH_IMMEDIATE)
         eq_(app.status, amo.STATUS_REJECTED)
         assert not app.latest_version.features.has_sms
 
@@ -1371,7 +1370,7 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         self.post(data)
         app = self.get_app()
         assert app.latest_version.features.has_sms
-        eq_(app.make_public, None)
+        eq_(app.publish_type, amo.PUBLISH_IMMEDIATE)
         eq_(app.status, amo.STATUS_PUBLIC)
         action_id = amo.LOG.REVIEW_FEATURES_OVERRIDE.id
         assert not AppLog.objects.filter(
@@ -1537,10 +1536,10 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
     @mock.patch('mkt.webapps.tasks.update_cached_manifests')
     @mock.patch('mkt.webapps.models.Webapp.update_supported_locales')
     @mock.patch('mkt.webapps.models.Webapp.update_name_from_package_manifest')
-    def test_pending_to_public_waiting(self, update_name, update_locales,
-                                       update_cached_manifests, index_webapps,
-                                       storefront_mock):
-        self.get_app().update(make_public=amo.PUBLIC_WAIT)
+    def test_pending_to_approved(self, update_name, update_locales,
+                                 update_cached_manifests, index_webapps,
+                                 storefront_mock):
+        self.get_app().update(publish_type=amo.PUBLISH_PRIVATE)
 
         # Reset mocks from the above update call.
         index_webapps.reset_mock()
@@ -1555,9 +1554,8 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         data.update(self._attachment_management_form(num=0))
         self.post(data)
         app = self.get_app()
-        eq_(app.status, amo.STATUS_PUBLIC_WAITING)
-        eq_(app._current_version.files.all()[0].status,
-            amo.STATUS_PUBLIC_WAITING)
+        eq_(app.status, amo.STATUS_APPROVED)
+        eq_(app._current_version.files.all()[0].status, amo.STATUS_APPROVED)
         self._check_log(amo.LOG.APPROVE_VERSION_WAITING)
 
         eq_(len(mail.outbox), 1)
@@ -1576,13 +1574,14 @@ class TestReviewApp(AppReviewerTest, AccessMixin, AttachmentManagementMixin,
         eq_(index_webapps.delay.call_count, 1)
 
     @mock.patch('lib.crypto.packaged.sign')
-    def test_public_waiting_signs(self, sign):
-        self.get_app().update(is_packaged=True, make_public=amo.PUBLIC_WAIT)
+    def test_approved_signs(self, sign):
+        self.get_app().update(is_packaged=True,
+                              publish_type=amo.PUBLISH_PRIVATE)
         data = {'action': 'public', 'comments': 'something'}
         data.update(self._attachment_management_form(num=0))
         self.post(data)
 
-        eq_(self.get_app().status, amo.STATUS_PUBLIC_WAITING)
+        eq_(self.get_app().status, amo.STATUS_APPROVED)
         eq_(sign.call_args[0][0], self.get_app().current_version.pk)
 
     def test_pending_to_reject(self):
@@ -2246,9 +2245,18 @@ class TestReviewLog(AppReviewerTest, AccessMixin):
         eq_(r.status_code, 200)
         doc = pq(r.content)
         assert doc('#log-filter button'), 'No filters.'
+
         # Should have 2 showing.
         rows = doc('tbody tr')
-        eq_(rows.filter(':not(.hide)').length, 2)
+        logs = rows.filter(':not(.hide)')
+        eq_(logs.length, 2)
+
+        # Ensure that the app links are valid.
+        eq_(logs.find('.name .app-link').eq(0).attr('href'),
+            self.apps[0].get_url_path())
+        eq_(logs.find('.name .app-link').eq(1).attr('href'),
+            self.apps[1].get_url_path())
+
         eq_(rows.filter('.hide').eq(0).text(), 'youwin')
 
     def test_search_app_soft_deleted(self):
@@ -2721,6 +2729,22 @@ class TestModeratedQueue(AppReviewerTest, AccessMixin):
         eq_(doc('.tabnav li a:eq(3)').text(), u'Escalations (0)')
         eq_(doc('.tabnav li a:eq(4)').text(), u'Moderated Reviews (2)')
 
+    def test_deleted_app(self):
+        "Test that a deleted app doesn't break the queue."
+        self.app.delete()
+        r = self.client.get(self.url)
+        eq_(r.status_code, 200)
+
+    def test_queue_count_deleted_app(self):
+        self.app.delete()
+        r = self.client.get(self.url)
+        eq_(r.status_code, 200)
+        doc = pq(r.content)
+        eq_(doc('.tabnav li a:eq(0)').text(), u'Apps (0)')
+        eq_(doc('.tabnav li a:eq(1)').text(), u'Re-reviews (0)')
+        eq_(doc('.tabnav li a:eq(2)').text(), u'Updates (0)')
+        eq_(doc('.tabnav li a:eq(3)').text(), u'Moderated Reviews (0)')
+
 
 class TestGetSigned(BasePackagedAppTest, amo.tests.TestCase):
     fixtures = fixture('webapp_337141', 'user_999', 'user_editor',
@@ -2838,8 +2862,7 @@ class TestMiniManifestView(BasePackagedAppTest):
         manifest = self.app.get_manifest_json(self.file)
 
         res = self.client.get(self.url)
-        eq_(res['Content-type'],
-            'application/x-web-app-manifest+json; charset=utf-8')
+        eq_(res['Content-type'], MANIFEST_CONTENT_TYPE)
         data = json.loads(res.content)
         eq_(data['name'], manifest['name'])
         eq_(data['developer']['name'], 'Mozilla Marketplace')
@@ -2855,8 +2878,7 @@ class TestMiniManifestView(BasePackagedAppTest):
         manifest = self.app.get_manifest_json(self.file)
 
         res = self.client.get(self.url)
-        eq_(res['Content-type'],
-            'application/x-web-app-manifest+json; charset=utf-8')
+        eq_(res['Content-type'], MANIFEST_CONTENT_TYPE)
         data = json.loads(res.content)
         eq_(data['name'], manifest['name'])
         eq_(data['developer']['name'], 'Mozilla Marketplace')
@@ -2883,8 +2905,7 @@ class TestMiniManifestView(BasePackagedAppTest):
 
         res = self.client.get(urlparams(self.url, token=token.token))
         eq_(res.status_code, 200)
-        eq_(res['Content-type'],
-            'application/x-web-app-manifest+json; charset=utf-8')
+        eq_(res['Content-type'], MANIFEST_CONTENT_TYPE)
         data = json.loads(res.content)
         ok_('token=' in data['package_path'])
 
@@ -3292,7 +3313,6 @@ class TestReviewPage(amo.tests.TestCase):
     fixtures = fixture('group_editor', 'user_editor', 'user_editor_group')
 
     def setUp(self):
-        self.create_switch('iarc')
         self.app = app_factory(status=amo.STATUS_PENDING)
         self.reviewer = UserProfile.objects.get(username='editor')
         self.url = reverse('reviewers.apps.review', args=[self.app.app_slug])
@@ -3321,7 +3341,7 @@ class TestAbusePage(AppReviewerTest):
     fixtures = fixture('group_editor', 'user_editor', 'user_editor_group')
 
     def setUp(self):
-        self.app = app_factory(name = u'My app é <script>alert(5)</script>')
+        self.app = app_factory(name=u'My app é <script>alert(5)</script>')
         self.url = reverse('reviewers.apps.review.abuse',
                            args=[self.app.app_slug])
         AbuseReport.objects.create(addon=self.app, message=self.app.name)

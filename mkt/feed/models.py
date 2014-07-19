@@ -23,12 +23,14 @@ from amo.decorators import use_master
 from amo.models import SlugField
 
 import mkt.carriers
+import mkt.feed.constants as feed
 import mkt.regions
 from mkt.collections.fields import ColorField
+from mkt.constants.categories import CATEGORY_CHOICES
 from mkt.feed import indexers
 from mkt.ratings.validators import validate_rating
 from mkt.search.indexers import index
-from mkt.webapps.models import Addon, Category, clean_slug, Preview, Webapp
+from mkt.webapps.models import Addon, clean_slug, Preview, Webapp
 from mkt.webapps.tasks import index_webapps
 from mkt.translations.fields import PurifiedField, save_signal
 
@@ -209,6 +211,7 @@ class FeedBrand(BaseFeedCollection):
         abstract = False
         db_table = 'mkt_feed_brand'
 
+    @classmethod
     def get_indexer(self):
         return indexers.FeedBrandIndexer
 
@@ -247,6 +250,7 @@ class FeedCollection(BaseFeedCollection, BaseFeedImage):
         abstract = False
         db_table = 'mkt_feed_collection'
 
+    @classmethod
     def get_indexer(self):
         return indexers.FeedCollectionIndexer
 
@@ -319,6 +323,7 @@ class FeedShelf(BaseFeedCollection, BaseFeedImage):
         abstract = False
         db_table = 'mkt_feed_shelf'
 
+    @classmethod
     def get_indexer(self):
         return indexers.FeedShelfIndexer
 
@@ -352,6 +357,7 @@ class FeedApp(BaseFeedImage, amo.models.ModelBase):
     class Meta:
         db_table = 'mkt_feed_app'
 
+    @classmethod
     def get_indexer(self):
         return indexers.FeedAppIndexer
 
@@ -378,7 +384,8 @@ class FeedItem(amo.models.ModelBase):
     describing the conditions that the feed item should be included in a user's
     feed.
     """
-    category = models.ForeignKey(Category, null=True, blank=True)
+    category = models.CharField(null=True, blank=True, max_length=30,
+                                choices=CATEGORY_CHOICES)
     region = models.PositiveIntegerField(
         default=None, null=True, blank=True, db_index=True,
         choices=mkt.regions.REGIONS_CHOICES_ID)
@@ -398,6 +405,10 @@ class FeedItem(amo.models.ModelBase):
         db_table = 'mkt_feed_item'
         ordering = ('order',)
 
+    @classmethod
+    def get_indexer(cls):
+        return indexers.FeedItemIndexer
+
 
 # Maintain ElasticSearch index.
 @receiver(models.signals.post_save, sender=FeedApp,
@@ -408,6 +419,8 @@ class FeedItem(amo.models.ModelBase):
           dispatch_uid='feedcollection.search.index')
 @receiver(models.signals.post_save, sender=FeedShelf,
           dispatch_uid='feedshelf.search.index')
+@receiver(models.signals.post_save, sender=FeedItem,
+          dispatch_uid='feeditem.search.index')
 def update_search_index(sender, instance, **kw):
     index.delay([instance.id], instance.get_indexer())
 

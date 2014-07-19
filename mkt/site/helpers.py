@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from django.conf import settings
 
@@ -10,7 +11,10 @@ from tower import ugettext as _
 
 from amo.helpers import urlparams
 from amo.urlresolvers import reverse
+
 from mkt.translations.helpers import truncate
+from mkt.users.views import fxa_oauth_api
+
 
 log = commonware.log.getLogger('z.mkt.site')
 
@@ -52,54 +56,46 @@ def no_results():
 @register.function
 def market_button(context, product, receipt_type=None, classes=None):
     request = context['request']
-    if product.is_webapp():
-        purchased = False
-        classes = (classes or []) + ['button', 'product']
-        reviewer = receipt_type == 'reviewer'
-        data_attrs = {'manifest_url': product.get_manifest_url(reviewer),
-                      'is_packaged': json.dumps(product.is_packaged)}
+    purchased = False
+    classes = (classes or []) + ['button', 'product']
+    reviewer = receipt_type == 'reviewer'
+    data_attrs = {'manifest_url': product.get_manifest_url(reviewer),
+                  'is_packaged': json.dumps(product.is_packaged)}
 
-        installed = None
+    installed = None
 
-        if request.amo_user:
-            installed_set = request.amo_user.installed_set
-            installed = installed_set.filter(addon=product).exists()
+    if request.amo_user:
+        installed_set = request.amo_user.installed_set
+        installed = installed_set.filter(addon=product).exists()
 
-        # Handle premium apps.
-        if product.has_premium():
-            # User has purchased app.
-            purchased = (request.amo_user and
-                         product.pk in request.amo_user.purchase_ids())
+    # Handle premium apps.
+    if product.has_premium():
+        # User has purchased app.
+        purchased = (request.amo_user and
+                     product.pk in request.amo_user.purchase_ids())
 
-            # App authors are able to install their apps free of charge.
-            if (not purchased and
-                    request.check_ownership(product, require_author=True)):
-                purchased = True
+        # App authors are able to install their apps free of charge.
+        if (not purchased and
+                request.check_ownership(product, require_author=True)):
+            purchased = True
 
-        if installed or purchased or not product.has_premium():
-            label = _('Install')
-        else:
-            label = product.get_tier_name()
+    if installed or purchased or not product.has_premium():
+        label = _('Install')
+    else:
+        label = product.get_tier_name()
 
-        # Free apps and purchased apps get active install buttons.
-        if not product.is_premium() or purchased:
-            classes.append('install')
+    # Free apps and purchased apps get active install buttons.
+    if not product.is_premium() or purchased:
+        classes.append('install')
 
-        c = dict(product=product, label=label, purchased=purchased,
-                 data_attrs=data_attrs, classes=' '.join(classes))
-        t = env.get_template('site/helpers/webapp_button.html')
+    c = dict(product=product, label=label, purchased=purchased,
+             data_attrs=data_attrs, classes=' '.join(classes))
+    t = env.get_template('site/helpers/webapp_button.html')
     return jinja2.Markup(t.render(c))
 
 
 def product_as_dict(request, product, purchased=None, receipt_type=None,
                     src=''):
-    # Dev environments might not have authors set.
-    author = ''
-    author_url = ''
-    if product.listed_authors:
-        author = product.listed_authors[0].name
-        author_url = product.listed_authors[0].get_url_path()
-
     receipt_url = (reverse('receipt.issue', args=[product.app_slug]) if
                    receipt_type else product.get_detail_url('record'))
     token_url = reverse('generate-reviewer-token', args=[product.app_slug])
@@ -107,32 +103,18 @@ def product_as_dict(request, product, purchased=None, receipt_type=None,
     src = src or request.GET.get('src', '')
     reviewer = receipt_type == 'reviewer'
 
+    # This is the only info. we need to render the app buttons on the
+    # Reviewer Tools pages.
     ret = {
         'id': product.id,
         'name': product.name,
-        'categories': [unicode(cat.slug) for cat in
-                       product.categories.all()],
+        'categories': product.categories,
         'manifest_url': product.get_manifest_url(reviewer),
         'recordUrl': urlparams(receipt_url, src=src),
         'tokenUrl': token_url,
-        'author': author,
-        'author_url': author_url,
-        'iconUrl': product.get_icon_url(64),
         'is_packaged': product.is_packaged,
         'src': src
     }
-
-    # Add in previews to the dict.
-    if product.all_previews:
-        previews = []
-        for p in product.all_previews:
-            preview = {
-                'fullUrl': jinja2.escape(p.image_url),
-                'type': jinja2.escape(p.filetype),
-                'thumbUrl': jinja2.escape(p.thumbnail_url),
-            }
-            previews.append(preview)
-        ret.update({'previews': previews})
 
     if product.premium:
         ret.update({
@@ -269,3 +251,15 @@ def get_doc_path(context, path, extension):
                 return localized_file_path
         except IOError:
             return '%s/en-US.%s' % (path, extension)
+
+
+@jinja2.contextfunction
+@register.function
+def fxa_auth_info(context=None):
+    state = uuid.uuid4().hex
+    return (state,
+            urlparams(
+                fxa_oauth_api('authorization'),
+                client_id=settings.FXA_CLIENT_ID,
+                state=state,
+                scope='profile'))

@@ -20,7 +20,7 @@ class AppStatusSerializer(serializers.ModelSerializer):
         # You can push to the pending queue.
         amo.STATUS_NULL: amo.STATUS_PENDING,
         # You can push to public if you've been reviewed.
-        amo.STATUS_PUBLIC_WAITING: amo.STATUS_PUBLIC,
+        amo.STATUS_APPROVED: amo.STATUS_PUBLIC,
     }
 
     class Meta:
@@ -79,12 +79,23 @@ class PreviewSerializer(serializers.ModelSerializer):
         fields = ['filetype', 'image_url', 'id', 'resource_uri',
                   'thumbnail_url']
 
-    def get_resource_uri(self, request):
-        if self.object is None:
-            return None
-        return reverse('app-preview-detail', kwargs={'pk': self.object.pk})
+    def get_resource_uri(self, obj):
+        if obj:
+            return reverse('app-preview-detail', kwargs={'pk': obj})
 
 
 class SimplePreviewSerializer(PreviewSerializer):
     class Meta(PreviewSerializer.Meta):
         fields = ['id', 'image_url', 'thumbnail_url']
+
+
+class FeedPreviewESSerializer(PreviewSerializer):
+    """
+    Preview serializer for feed where we want to know the image orientation to
+    scale feed app tiles appropriately.
+    """
+    id = serializers.IntegerField(source='id')
+    thumbnail_size = serializers.Field(source='thumbnail_size')
+
+    class Meta(PreviewSerializer.Meta):
+        fields = ['id', 'thumbnail_size', 'thumbnail_url']

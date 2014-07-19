@@ -10,6 +10,7 @@ from django.test.client import RequestFactory
 from django.test.utils import override_settings
 
 from mock import patch
+from nose import SkipTest
 from nose.tools import eq_, ok_
 
 import amo
@@ -27,7 +28,6 @@ from mkt.constants import regions
 from mkt.constants.features import FeatureProfile
 from mkt.regions.middleware import RegionMiddleware
 from mkt.search.forms import DEVICE_CHOICES_IDS
-from mkt.search.serializers import SimpleESAppSerializer
 from mkt.search.utils import S
 from mkt.search.views import DEFAULT_SORTING, SearchView
 from mkt.site.fixtures import fixture
@@ -35,8 +35,7 @@ from mkt.tags.models import AddonTag, Tag
 from mkt.translations.helpers import truncate
 from mkt.users.models import UserProfile
 from mkt.webapps.indexers import WebappIndexer
-from mkt.webapps.models import (AddonCategory, AddonDeviceType, AddonUpsell,
-                                Category, Installed, Webapp)
+from mkt.webapps.models import AddonDeviceType, AddonUpsell, Installed, Webapp
 from mkt.webapps.tasks import unindex_webapps
 
 
@@ -62,7 +61,7 @@ class TestGetRegion(TestCase):
 
     @patch('mkt.regions.middleware.RegionMiddleware.region_from_request')
     def test_get_region_all(self, mock_request_region):
-        geoip_fallback = regions.PE  # Different than the default (restofworld).
+        geoip_fallback = regions.PE  # Different than the default: restofworld.
         mock_request_region.return_value = geoip_fallback
 
         # Test string values (should return region with that slug).
@@ -95,8 +94,7 @@ class TestApi(RestOAuth, ESTestCase):
         self.client = RestOAuthClient(None)
         self.url = reverse('search-api')
         self.webapp = Webapp.objects.get(pk=337141)
-        self.category = Category.objects.create(name='Books', slug='books',
-                                                type=amo.ADDON_WEBAPP)
+        self.category = 'books'
         self.webapp.icon_hash = 'fakehash'
         self.webapp.save()
         self.refresh('webapp')
@@ -121,15 +119,9 @@ class TestApi(RestOAuth, ESTestCase):
 
     def test_wrong_category(self):
         res = self.client.get(self.url,
-                              data={'cat': self.category.slug + 'xq'})
+                              data={'cat': self.category + 'xq'})
         eq_(res.status_code, 400)
         eq_(res['Content-Type'], 'application/json')
-
-    def test_wrong_weight(self):
-        self.category.update(weight=-1)
-        res = self.client.get(self.url, data={'cat': self.category.slug})
-        eq_(res.status_code, 200)
-        eq_(len(res.json['objects']), 0)
 
     def test_wrong_sort(self):
         res = self.client.get(self.url, data={'sort': 'awesomeness'})
@@ -147,18 +139,17 @@ class TestApi(RestOAuth, ESTestCase):
         eq_(res.status_code, 200)
 
     def test_right_category(self):
-        res = self.client.get(self.url, data={'cat': self.category.slug})
+        res = self.client.get(self.url, data={'cat': self.category})
         eq_(res.status_code, 200)
         eq_(res.json['objects'], [])
 
     def create(self):
-        AddonCategory.objects.create(addon=self.webapp, category=self.category)
-        self.webapp.save()
+        self.webapp.update(categories=[self.category])
         self.refresh('webapp')
 
     def test_right_category_present(self):
         self.create()
-        res = self.client.get(self.url, data={'cat': self.category.slug})
+        res = self.client.get(self.url, data={'cat': self.category})
         eq_(res.status_code, 200)
         objs = res.json['objects']
         eq_(len(objs), 1)
@@ -194,20 +185,21 @@ class TestApi(RestOAuth, ESTestCase):
                    '.process_request', fakeauth):
             with self.settings(SITE_URL=''):
                 self.create()
-            res = self.client.get(self.url, data={'cat': self.category.slug})
+            res = self.client.get(self.url, data={'cat': self.category})
             obj = res.json['objects'][0]
             assert 'user' in obj
 
     def test_dehydrate(self):
         with self.settings(SITE_URL='http://hy.fr'):
             self.create()
-            res = self.client.get(self.url, data={'cat': self.category.slug})
+            res = self.client.get(self.url, data={'cat': self.category})
             eq_(res.status_code, 200)
             obj = res.json['objects'][0]
             content_ratings = obj['content_ratings']
             eq_(obj['absolute_url'],
                 absolutify(self.webapp.get_absolute_url()))
             eq_(obj['app_type'], self.webapp.app_type)
+            eq_(obj['categories'], [self.category])
             eq_(content_ratings['body'], 'generic')
             eq_(content_ratings['rating'], None)
             eq_(content_ratings['descriptors'], [])
@@ -330,6 +322,7 @@ class TestApi(RestOAuth, ESTestCase):
         eq_(obj['slug'], self.webapp.app_slug)
 
     def test_q_num_requests(self):
+        raise SkipTest('Unskip when we implement elasticsearch-dsl queries')
         es = WebappIndexer.get_es()
         orig_search = es.search
         es.counter = 0
@@ -353,6 +346,7 @@ class TestApi(RestOAuth, ESTestCase):
         es.search = orig_search
 
     def test_q_num_requests_no_results(self):
+        raise SkipTest('Unskip when we implement elasticsearch-dsl queries')
         es = WebappIndexer.get_es()
         orig_search = es.search
         es.counter = 0
@@ -783,15 +777,15 @@ class BaseFeaturedTests(RestOAuth, ESTestCase):
 
     def setUp(self):
         super(BaseFeaturedTests, self).setUp()
-        self.cat = Category.objects.create(type=amo.ADDON_WEBAPP, slug='books')
+        self.cat = 'books'
         self.app = Webapp.objects.get(pk=337141)
         AddonDeviceType.objects.create(
             addon=self.app, device_type=DEVICE_CHOICES_IDS['firefoxos'])
-        AddonCategory.objects.get_or_create(addon=self.app, category=self.cat)
+        self.app.update(categories=[self.cat])
         self.profile = FeatureProfile(apps=True, audio=True, fullscreen=True,
                                       geolocation=True, indexeddb=True,
                                       sms=True).to_signature()
-        self.qs = {'cat': 'books', 'pro': self.profile, 'dev': 'firefoxos'}
+        self.qs = {'cat': self.cat, 'pro': self.profile, 'dev': 'firefoxos'}
 
 
 class TestFeaturedCollections(BaseFeaturedTests):
@@ -1072,8 +1066,8 @@ class TestRocketbarApi(ESTestCase):
         unindex_webapps([self.app1.id, self.app2.id])
         # Required to purge the suggestions data structure. In Lucene, a
         # document is not deleted from a segment, just marked as deleted.
-        WebappIndexer.get_es().optimize(WebappIndexer.get_index(),
-                                        only_expunge_deletes=True)
+        WebappIndexer.get_es().indices.optimize(
+            index=WebappIndexer.get_index(), only_expunge_deletes=True)
 
     def test_no_results(self):
         with self.assertNumQueries(0):
@@ -1148,21 +1142,18 @@ class TestRocketbarApi(ESTestCase):
                         'name': unicode(self.app2.name),
                         'slug': self.app2.app_slug})
 
+    def test_suggestions_with_multiple_icons(self):
+        url = reverse('api-v2:rocketbar-search-api')
+        with self.assertNumQueries(0):
+            response = self.client.get(
+                url, data={'q': 'something', 'lang': 'en-US', 'limit': 1})
+        parsed = json.loads(response.content)
+        eq_(len(parsed), 1)
+        eq_(parsed[0]['manifest_url'], self.app2.get_manifest_url())
+        eq_(parsed[0]['name'], unicode(self.app2.name))
+        eq_(parsed[0]['slug'], self.app2.app_slug)
 
-class TestSimpleESAppSerializer(amo.tests.ESTestCase):
-    fixtures = fixture('webapp_337141')
+        assert 'icon' not in parsed[0], '`icon` field has been deprecated.'
 
-    def setUp(self):
-        self.webapp = Webapp.objects.get(pk=337141)
-        self.request = RequestFactory().get('/')
-        RegionMiddleware().process_request(self.request)
-        self.reindex(Webapp, 'webapp')
-        self.indexer = S(WebappIndexer).filter(id=337141).execute().objects[0]
-        self.serializer = SimpleESAppSerializer(self.indexer,
-            context={'request': self.request})
-
-    def test_regions_present(self):
-        # Regression test for bug 964802.
-        ok_('regions' in self.serializer.data)
-        eq_(len(self.serializer.data['regions']),
-            len(self.webapp.get_regions()))
+        for size in (128, 64, 48, 32):
+            eq_(parsed[0]['icons'][str(size)], self.app2.get_icon_url(size))

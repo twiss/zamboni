@@ -11,6 +11,7 @@ from nose.tools import eq_
 import amo
 import amo.tests
 
+from mkt.constants import MANIFEST_CONTENT_TYPE
 from mkt.webapps.models import Webapp
 from mkt.site.fixtures import fixture
 
@@ -82,8 +83,7 @@ class TestPackagedManifest(amo.tests.TestCase):
         _mock.return_value = self._mocked_json()
         res = self.client.get(self.url)
         eq_(res.content, self._mocked_json())
-        eq_(res['Content-Type'],
-            'application/x-web-app-manifest+json; charset=utf-8')
+        eq_(res['Content-Type'], MANIFEST_CONTENT_TYPE)
         eq_(res['ETag'], '"%s"' % self.get_digest_from_manifest())
 
     @mock.patch('mkt.webapps.models.Webapp.get_cached_manifest')
@@ -93,8 +93,7 @@ class TestPackagedManifest(amo.tests.TestCase):
         # Get the minifest with the first simulated package.
         res = self.client.get(self.url)
         eq_(res.content, self._mocked_json())
-        eq_(res['Content-Type'],
-            'application/x-web-app-manifest+json; charset=utf-8')
+        eq_(res['Content-Type'], MANIFEST_CONTENT_TYPE)
 
         first_etag = res['ETag']
 
@@ -110,8 +109,7 @@ class TestPackagedManifest(amo.tests.TestCase):
         # Get the minifest with the second simulated package.
         res = self.client.get(self.url)
         eq_(res.content, self._mocked_json())
-        eq_(res['Content-Type'],
-            'application/x-web-app-manifest+json; charset=utf-8')
+        eq_(res['Content-Type'], MANIFEST_CONTENT_TYPE)
 
         second_etag = res['ETag']
 
@@ -148,11 +146,18 @@ class TestPackagedManifest(amo.tests.TestCase):
         self.client.logout()
         res = self.client.get(self.url)
         eq_(res.status_code, 200)
-        eq_(res['Content-type'],
-            'application/x-web-app-manifest+json; charset=utf-8')
+        eq_(res['Content-Type'], MANIFEST_CONTENT_TYPE)
 
     @mock.patch('mkt.webapps.models.Webapp.get_cached_manifest')
     def test_has_cors(self, _mock):
         _mock.return_value = self._mocked_json()
         res = self.client.get(self.url)
         self.assertCORS(res, 'get')
+
+    @mock.patch('mkt.webapps.models.storage')
+    @mock.patch('mkt.webapps.models.packaged')
+    def test_calls_sign(self, _sign, _storage):
+        _sign.sign.return_value = '/path/to/signed.zip'
+        _storage.size.return_value = 1234
+        self.client.get(self.url)
+        assert _sign.sign.called

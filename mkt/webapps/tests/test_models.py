@@ -22,8 +22,8 @@ from django.test.utils import override_settings
 from django.utils import translation
 from django.utils.translation import ugettext_lazy as _
 
+import elasticsearch
 import mock
-import pyelasticsearch
 from elasticutils.contrib.django import S
 from mock import Mock, patch
 from nose.tools import eq_, ok_, raises
@@ -37,10 +37,10 @@ from constants.applications import DEVICE_TYPES
 from constants.payments import PROVIDER_BANGO, PROVIDER_BOKU
 from lib.crypto import packaged
 from lib.crypto.tests import mock_sign
-from lib.iarc.utils import (DESC_MAPPING, INTERACTIVES_MAPPING,
-                            REVERSE_DESC_MAPPING, REVERSE_INTERACTIVES_MAPPING)
 from lib.utils import static_url
-from mkt.constants import apps
+from mkt.constants import apps, MANIFEST_CONTENT_TYPE
+from mkt.constants.iarc_mappings import (DESCS, INTERACTIVES, REVERSE_DESCS,
+                                         REVERSE_INTERACTIVES)
 from mkt.developers.models import (AddonPaymentAccount, PaymentAccount,
                                    SolitudeSeller)
 from mkt.files.models import File, Platform
@@ -55,11 +55,10 @@ from mkt.translations.models import Translation
 from mkt.users.models import UserProfile
 from mkt.versions.models import update_status, Version
 from mkt.webapps.indexers import WebappIndexer
-from mkt.webapps.models import (Addon, AddonCategory, AddonDeviceType,
-                                AddonExcludedRegion, AddonUpsell, AppFeatures,
-                                AppManifest, BlacklistedSlug, Category,
-                                ContentRating, Geodata, get_excluded_in,
-                                IARCInfo, Installed, Preview,
+from mkt.webapps.models import (Addon, AddonDeviceType, AddonExcludedRegion,
+                                AddonUpsell, AppFeatures, AppManifest,
+                                BlacklistedSlug, ContentRating, Geodata,
+                                get_excluded_in, IARCInfo, Installed, Preview,
                                 RatingDescriptors, RatingInteractives,
                                 version_changed, Webapp)
 from mkt.webapps.signals import version_changed as version_changed_signal
@@ -202,22 +201,6 @@ class TestCleanSlug(amo.tests.TestCase):
             Addon.objects.create(slug=long_slug)
         with self.assertRaises(RuntimeError):  # Fail on the 100th clash.
             Addon.objects.create(slug=long_slug)
-
-
-class TestCategoryModel(amo.tests.TestCase):
-
-    def test_category_url(self):
-        cat = Category(slug='omg')
-        assert cat.get_url_path()
-
-    @patch('mkt.webapps.tasks.index_webapps')
-    def test_reindex_on_change(self, index_mock):
-        c = Category.objects.create(type=amo.ADDON_WEBAPP, slug='keyboardcat')
-        app = amo.tests.app_factory()
-        AddonCategory.objects.create(addon=app, category=c)
-        c.update(slug='nyancat')
-        assert index_mock.called
-        eq_(index_mock.call_args[0][0], [app.id])
 
 
 class TestPreviewModel(amo.tests.TestCase):
@@ -921,13 +904,13 @@ class TestWebapp(amo.tests.TestCase):
         v = Version.objects.create(addon=app, version='1.9')
         self.assertCloseToNow(v.nomination)
 
-    def test_nomination_public_waiting(self):
+    def test_nomination_approved(self):
         # New versions while public waiting get a new version nomination.
         app = app_factory()
-        app.update(is_packaged=True, status=amo.STATUS_PUBLIC_WAITING)
+        app.update(is_packaged=True, status=amo.STATUS_APPROVED)
         old_ver = app.versions.latest()
         old_ver.update(nomination=self.days_ago(1))
-        old_ver.all_files[0].update(status=amo.STATUS_PUBLIC_WAITING)
+        old_ver.all_files[0].update(status=amo.STATUS_APPROVED)
         v = Version.objects.create(addon=app, version='1.9')
         self.assertCloseToNow(v.nomination)
 
@@ -1046,10 +1029,9 @@ class TestWebapp(amo.tests.TestCase):
         assert app.is_fully_complete()
 
     @mock.patch('mkt.webapps.models.Webapp.payments_complete')
-    @mock.patch('mkt.webapps.models.Webapp.content_ratings_complete')
+    @mock.patch('mkt.webapps.models.Webapp.is_rated')
     @mock.patch('mkt.webapps.models.Webapp.details_complete')
     def test_next_step(self, detail_step, rating_step, pay_step):
-        self.create_switch('iarc')
         for step in (detail_step, rating_step, pay_step):
             step.return_value = False
         app = app_factory(status=amo.STATUS_NULL)
@@ -1153,14 +1135,12 @@ class TestWebapp(amo.tests.TestCase):
 class TestWebappContentRatings(amo.tests.TestCase):
 
     def test_rated(self):
-        self.create_switch('iarc')
         assert app_factory(rated=True).is_rated()
         assert not app_factory().is_rated()
 
     @mock.patch('mkt.webapps.models.Webapp.details_complete')
     @mock.patch('mkt.webapps.models.Webapp.payments_complete')
     def test_set_content_ratings(self, pay_mock, detail_mock):
-        self.create_switch('iarc')
         detail_mock.return_value = True
         pay_mock.return_value = True
 
@@ -1199,7 +1179,6 @@ class TestWebappContentRatings(amo.tests.TestCase):
         eq_(app.reload().status, amo.STATUS_PENDING)
 
     def test_app_delete_clears_iarc_data(self):
-        self.create_switch('iarc')
         app = app_factory(rated=True)
 
         # Ensure we have some data to start with.
@@ -1291,7 +1270,7 @@ class TestWebappContentRatings(amo.tests.TestCase):
 
         # Create.
         app.set_interactives([
-            'has_shares_info', 'has_digital_PurChaSes', 'has_UWOTM8'
+            'has_shares_info', 'has_digital_purchases', 'has_UWOTM8'
         ])
         eq_(RatingInteractives.objects.count(), 1)
         app_interactives = RatingInteractives.objects.get(addon=app)
@@ -1312,7 +1291,6 @@ class TestWebappContentRatings(amo.tests.TestCase):
     @mock.patch('mkt.webapps.models.render_xml')
     def test_set_iarc_storefront_data(self, render_mock, storefront_mock):
         # Set up ratings/descriptors/interactives.
-        self.create_switch('iarc')
         app = app_factory(name='LOL', app_slug='ha')
         app.current_version.reviewed = datetime(2013, 1, 1, 12, 34, 56)
         app.current_version._developer_name = 'Lex Luthor'
@@ -1364,14 +1342,12 @@ class TestWebappContentRatings(amo.tests.TestCase):
 
     @mock.patch('lib.iarc.client.MockClient.call')
     def test_set_iarc_storefront_data_not_rated_by_iarc(self, storefront_mock):
-        self.create_switch('iarc')
         app_factory().set_iarc_storefront_data()
         assert not storefront_mock.called
 
     @mock.patch('mkt.webapps.models.Webapp.current_version', new=None)
     @mock.patch('lib.iarc.client.MockClient.call')
     def test_set_iarc_storefront_data_no_version(self, storefront_mock):
-        self.create_switch('iarc')
         app = app_factory(rated=True, status=amo.STATUS_PUBLIC)
         ok_(not app.current_version)
         app.set_iarc_storefront_data()
@@ -1379,7 +1355,6 @@ class TestWebappContentRatings(amo.tests.TestCase):
 
     @mock.patch('lib.iarc.client.MockClient.call')
     def test_set_iarc_storefront_data_invalid_status(self, storefront_mock):
-        self.create_switch('iarc')
         app = app_factory()
         for status in (amo.STATUS_NULL, amo.STATUS_PENDING):
             app.update(status=status)
@@ -1390,7 +1365,6 @@ class TestWebappContentRatings(amo.tests.TestCase):
     @mock.patch('lib.iarc.client.MockClient.call')
     def test_set_iarc_storefront_data_disable(self, storefront_mock,
                                               render_mock):
-        self.create_switch('iarc')
         app = app_factory(name='LOL', rated=True)
         app.current_version.update(_developer_name='Lex Luthor')
         app.set_iarc_info(123, 'abc')
@@ -1410,38 +1384,6 @@ class TestWebappContentRatings(amo.tests.TestCase):
         eq_(data['title'], 'LOL')
         eq_(data['release_date'], '')
 
-    def test_get_descriptors_slugs(self):
-        app = app_factory()
-        eq_(app.get_descriptors_slugs(), [])
-
-        app.set_descriptors(['has_esrb_blood', 'has_pegi_scary'])
-        self.assertSetEqual(
-            app.get_descriptors_slugs(), ['ESRB_BLOOD', 'PEGI_SCARY'])
-
-    def test_get_descriptors_dehydrated(self):
-        app = app_factory()
-        eq_(app.get_descriptors_dehydrated(), {})
-
-        app.set_descriptors(['has_esrb_blood', 'has_pegi_scary'])
-        eq_(dict(app.get_descriptors_dehydrated()),
-            {'esrb': ['blood'], 'pegi': ['scary']})
-
-    def test_get_interactives_slugs(self):
-        app = app_factory()
-        eq_(app.get_interactives_slugs(), [])
-
-        app.set_interactives(['has_digital_purchases', 'has_shares_info'])
-        self.assertSetEqual(app.get_interactives_slugs(),
-                            ['DIGITAL_PURCHASES', 'SHARES_INFO'])
-
-    def test_get_interactives_dehydrated(self):
-        app = app_factory()
-        eq_(app.get_interactives_dehydrated(), [])
-
-        app.set_interactives(['has_digital_purchases', 'has_shares_info'])
-        eq_(app.get_interactives_dehydrated(), ['shares-info',
-                                                'digital-purchases'])
-
     @override_settings(SECRET_KEY='test')
     def test_iarc_token(self):
         app = Webapp()
@@ -1451,29 +1393,14 @@ class TestWebappContentRatings(amo.tests.TestCase):
 
     @mock.patch('mkt.webapps.models.Webapp.set_iarc_storefront_data')
     def test_delete_with_iarc(self, storefront_mock):
-        self.create_switch('iarc')
         app = app_factory(rated=True)
         app.delete()
         eq_(app.status, amo.STATUS_DELETED)
         assert storefront_mock.called
 
-    @mock.patch('mkt.webapps.models.Webapp.is_rated')
-    def test_content_ratings_complete(self, is_rated_mock):
-        # Default to complete if it's not needed.
-        is_rated_mock.return_value = False
-        app = app_factory()
-        assert app.content_ratings_complete()
-
-        self.create_switch('iarc', db=True)
-        assert not app.content_ratings_complete()
-
-        is_rated_mock.return_value = True
-        assert app.content_ratings_complete()
-
     @mock.patch('mkt.webapps.models.Webapp.details_complete')
     @mock.patch('mkt.webapps.models.Webapp.payments_complete')
     def test_completion_errors_ignore_ratings(self, mock1, mock2):
-        self.create_switch('iarc')
         app = app_factory()
         for mock in (mock1, mock2):
             mock.return_value = True
@@ -1625,7 +1552,6 @@ class TestWebappManager(amo.tests.TestCase):
             Webapp.objects.by_identifier('fake')
 
     def test_rated(self):
-        self.create_switch('iarc')
         rated = app_factory(rated=True)
         app_factory()
         eq_(Webapp.objects.count(), 2)
@@ -1704,8 +1630,7 @@ class TestPackagedModel(amo.tests.TestCase):
         # Check manifest.
         url = app.get_manifest_url()
         res = self.client.get(url)
-        eq_(res['Content-type'],
-            'application/x-web-app-manifest+json; charset=utf-8')
+        eq_(res['Content-type'], MANIFEST_CONTENT_TYPE)
         assert 'etag' in res._headers
         data = json.loads(res.content)
         eq_(data['name'], 'Blocked by Mozilla')
@@ -1936,7 +1861,6 @@ class TestDetailsComplete(amo.tests.TestCase):
 
     def setUp(self):
         self.device = DEVICE_TYPES.keys()[0]
-        self.cat = Category.objects.create(name='c', type=amo.ADDON_WEBAPP)
         self.webapp = Webapp.objects.create(type=amo.ADDON_WEBAPP,
                                             status=amo.STATUS_NULL)
 
@@ -1960,7 +1884,7 @@ class TestDetailsComplete(amo.tests.TestCase):
         self.webapp.save()
         self.fail('category')
 
-        AddonCategory.objects.create(addon=self.webapp, category=self.cat)
+        self.webapp.update(categories=['books'])
         self.fail('screenshot')
 
         self.webapp.previews.create()
@@ -1998,7 +1922,6 @@ class TestContentRating(amo.tests.WebappTestCase):
 
     def setUp(self):
         self.app = self.get_app()
-        self.create_switch('iarc')
 
     @mock.patch.object(mkt.regions.BR, 'ratingsbody',
                        mkt.ratingsbodies.CLASSIND)
@@ -2071,26 +1994,15 @@ class TestContentRatingsIn(amo.tests.WebappTestCase):
                                                region=region.id)
             eq_(self.get_app().content_ratings_in(region=region), [])
 
-    def test_in_for_region_and_category(self):
-        cat = Category.objects.create(slug='games', type=amo.ADDON_WEBAPP)
-        for region in mkt.regions.ALL_REGIONS:
-            eq_(self.app.content_ratings_in(region=region, category='games'),
-                [])
-            eq_(self.app.content_ratings_in(region=region, category=cat), [])
-
     def test_in_region_and_category(self):
         self.make_game()
-        cat = Category.objects.get(slug='games')
+        cat = 'games'
         for region in mkt.regions.ALL_REGIONS:
-            eq_(self.app.listed_in(region=region, category='games'), True)
-            eq_(self.app.listed_in(region=region, category=cat),
-                True)
+            eq_(self.app.listed_in(region=region, category=cat), True)
 
     def test_in_region_and_not_in_category(self):
-        cat = Category.objects.create(slug='games', type=amo.ADDON_WEBAPP)
+        cat = 'games'
         for region in mkt.regions.ALL_REGIONS:
-            eq_(self.app.content_ratings_in(region=region, category='games'),
-                [])
             eq_(self.app.content_ratings_in(region=region, category=cat), [])
 
     @mock.patch.object(mkt.regions.CO, 'ratingsbody', None)
@@ -2227,13 +2139,13 @@ class TestUpdateStatus(amo.tests.TestCase):
         app.update_status()
         eq_(app.status, amo.STATUS_PUBLIC)
 
-    def test_was_public_waiting_then_new_version(self):
-        app = amo.tests.app_factory(status=amo.STATUS_PUBLIC_WAITING)
+    def test_was_approved_then_new_version(self):
+        app = amo.tests.app_factory(status=amo.STATUS_APPROVED)
         File.objects.filter(version__addon=app).update(status=app.status)
         amo.tests.version_factory(addon=app,
                                   file_kw=dict(status=amo.STATUS_PENDING))
         app.update_status()
-        eq_(app.status, amo.STATUS_PUBLIC_WAITING)
+        eq_(app.status, amo.STATUS_APPROVED)
 
     def test_blocklisted(self):
         app = amo.tests.app_factory(status=amo.STATUS_BLOCKED)
@@ -2292,37 +2204,21 @@ class TestAppFeatures(DynamicBoolFieldsTestMixin, amo.tests.TestCase):
         eq_(getattr(obj, 'has_%s' % self.flags[0].lower()), False)
 
 
-class TestRatingDescriptors(DynamicBoolFieldsTestMixin, amo.tests.TestCase):
+class TestRatingDescriptors(amo.tests.TestCase):
 
     def setUp(self):
         super(TestRatingDescriptors, self).setUp()
-        self.model = RatingDescriptors
-        self.related_name = 'rating_descriptors'
-
-        self.BOOL_DICT = mkt.ratingdescriptors.RATING_DESCS
-        self.flags = ('ESRB_VIOLENCE', 'PEGI_LANG', 'CLASSIND_DRUGS')
-        self.expected = [u'Violence', u'Language', u'Drugs']
-
-        RatingDescriptors.objects.create(addon=self.app)
-
-    @mock.patch.dict('mkt.ratingdescriptors.RATING_DESCS',
-                     PEGI_LANG={'name': _(u'H\xe9llo')})
-    def test_to_list_nonascii(self):
-        self.expected[1] = u'H\xe9llo'
-        self._flag()
-        to_list = self.app.rating_descriptors.to_list()
-        self.assertSetEqual(self.to_unicode(to_list), self.expected)
 
     def test_desc_mapping(self):
         descs = RatingDescriptors.objects.create(addon=app_factory())
-        for body, mapping in DESC_MAPPING.items():
+        for body, mapping in DESCS.items():
             for native, rating_desc_field in mapping.items():
                 assert hasattr(descs, rating_desc_field), rating_desc_field
 
     def test_reverse_desc_mapping(self):
         descs = RatingDescriptors.objects.create(addon=app_factory())
         for desc in descs._fields():
-            eq_(type(REVERSE_DESC_MAPPING.get(desc)), unicode, desc)
+            eq_(type(REVERSE_DESCS.get(desc)), unicode, desc)
 
     def test_iarc_deserialize(self):
         descs = RatingDescriptors.objects.create(
@@ -2332,29 +2228,20 @@ class TestRatingDescriptors(DynamicBoolFieldsTestMixin, amo.tests.TestCase):
         eq_(descs.iarc_deserialize(body=mkt.ratingsbodies.ESRB), 'Blood')
 
 
-class TestRatingInteractives(DynamicBoolFieldsTestMixin, amo.tests.TestCase):
+class TestRatingInteractives(amo.tests.TestCase):
 
     def setUp(self):
         super(TestRatingInteractives, self).setUp()
-        self.model = RatingInteractives
-        self.related_name = 'rating_interactives'
-
-        self.BOOL_DICT = mkt.ratinginteractives.RATING_INTERACTIVES
-        self.flags = ('SHARES_INFO', 'DIGITAL_PURCHASES', 'USERS_INTERACT')
-        self.expected = [u'Shares Info', u'Digital Purchases',
-                         u'Users Interact']
-
-        RatingInteractives.objects.create(addon=self.app)
 
     def test_interactives_mapping(self):
         interactives = RatingInteractives.objects.create(addon=app_factory())
-        for native, field in INTERACTIVES_MAPPING.items():
+        for native, field in INTERACTIVES.items():
             assert hasattr(interactives, field)
 
     def test_reverse_interactives_mapping(self):
         interactives = RatingInteractives.objects.create(addon=app_factory())
         for interactive_field in interactives._fields():
-            assert REVERSE_INTERACTIVES_MAPPING.get(interactive_field)
+            assert REVERSE_INTERACTIVES.get(interactive_field)
 
     def test_iarc_deserialize(self):
         interactives = RatingInteractives.objects.create(
@@ -2384,8 +2271,7 @@ class TestManifestUpload(BaseUploadTest, amo.tests.TestCase):
         }
         # Note: we need a valid FileUpload instance, but in the end we are not
         # using its contents since we are mocking parse_addon().
-        upload = self.get_upload(abspath=self.manifest('mozball.webapp'),
-                                 is_webapp=True)
+        upload = self.get_upload(abspath=self.manifest('mozball.webapp'))
         app = Addon.objects.get(pk=337141)
         app.manifest_updated('', upload)
         version = app.current_version.reload()
@@ -2402,8 +2288,7 @@ class TestManifestUpload(BaseUploadTest, amo.tests.TestCase):
         }
         # Note: we need a valid FileUpload instance, but in the end we are not
         # using its contents since we are mocking parse_addon().
-        upload = self.get_upload(abspath=self.manifest('mozball.webapp'),
-                                 is_webapp=True)
+        upload = self.get_upload(abspath=self.manifest('mozball.webapp'))
         app = Addon.objects.get(pk=337141)
         app.manifest_updated('', upload)
         version = app.current_version.reload()
@@ -2413,7 +2298,6 @@ class TestManifestUpload(BaseUploadTest, amo.tests.TestCase):
     def test_manifest_url(self):
         upload = self.get_upload(abspath=self.manifest('mozball.webapp'))
         addon = Addon.from_upload(upload, [self.platform])
-        assert addon.is_webapp()
         eq_(addon.manifest_url, upload.name)
 
     def test_app_domain(self):
@@ -2568,8 +2452,8 @@ class TestSearchSignals(amo.tests.ESTestCase):
     def cleanup(self):
         for index in settings.ES_INDEXES.values():
             try:
-                self.es.delete_index(index)
-            except pyelasticsearch.ElasticHttpNotFoundError:
+                self.es.indices.delete(index=index)
+            except elasticsearch.NotFoundError:
                 pass
 
     def test_create(self):

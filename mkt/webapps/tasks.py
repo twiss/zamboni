@@ -13,12 +13,12 @@ from django.core.files.storage import default_storage as storage
 from django.core.urlresolvers import reverse
 from django.template import Context, loader
 
+import elasticsearch
 import pytz
 import requests
 from celery import chord
 from celery.exceptions import RetryTaskError
 from celeryutils import task
-from pyelasticsearch.exceptions import ElasticHttpNotFoundError
 from requests.exceptions import RequestException
 from test_utils import RequestFactory
 from tower import ugettext as _
@@ -54,10 +54,8 @@ def version_changed(addon_id, **kw):
 
 
 def update_last_updated(addon_id):
-    queries = Addon._last_updated_queries()
-    try:
-        addon = Addon.objects.get(pk=addon_id)
-    except Addon.DoesNotExist:
+    qs = Addon._last_updated_queries()
+    if not Webapp.objects.filter(pk=addon_id).exists():
         task_log.info(
             '[1@None] Updating last updated for %s failed, no addon found'
             % addon_id)
@@ -65,17 +63,12 @@ def update_last_updated(addon_id):
 
     task_log.info('[1@None] Updating last updated for %s.' % addon_id)
 
-    if addon.is_webapp():
-        q = 'webapps'
-    elif addon.status == amo.STATUS_PUBLIC:
-        q = 'public'
-    else:
-        q = 'exp'
-    qs = queries[q].filter(pk=addon_id).using('default')
-    res = qs.values_list('id', 'last_updated')
+    res = (qs.filter(pk=addon_id)
+             .using('default')
+             .values_list('id', 'last_updated'))
     if res:
         pk, t = res[0]
-        Addon.objects.filter(pk=pk).update(last_updated=t)
+        Webapp.objects.filter(pk=pk).update(last_updated=t)
 
 
 @task
@@ -200,8 +193,7 @@ def _update_manifest(id, check_hash, failed_fetches):
 
     # Validate the new manifest.
     upload = FileUpload.objects.create()
-    upload.add_file([content], webapp.manifest_url, len(content),
-                    is_webapp=True)
+    upload.add_file([content], webapp.manifest_url, len(content))
 
     validator(upload.pk)
 
@@ -349,12 +341,11 @@ def index_webapps(ids, **kw):
     indices = Reindexing.get_indices(index)
 
     es = WebappIndexer.get_es(urls=settings.ES_URLS)
-    qs = Webapp.indexing_transformer(Webapp.with_deleted.no_cache().filter(
-        id__in=ids))
+    qs = Webapp.with_deleted.no_cache().filter(id__in=ids)
     for obj in qs:
         doc = WebappIndexer.extract_document(obj.id, obj)
         for idx in indices:
-            WebappIndexer.index(doc, id_=obj.id, es=es, index=idx)
+            WebappIndexer.index(doc, id_=obj.id, index=idx)
 
 
 @post_request_task(acks_late=True)
@@ -375,7 +366,7 @@ def unindex_webapps(ids, **kw):
         for idx in indices:
             try:
                 WebappIndexer.unindex(id_=id_, es=es, index=idx)
-            except ElasticHttpNotFoundError:
+            except elasticsearch.NotFoundError:
                 # Ignore if it's not there.
                 task_log.info(
                     u'[Webapp:%s] Unindexing app but not found in index' % id_)
@@ -428,7 +419,27 @@ def dump_apps(ids, **kw):
 def zip_apps(*args, **kw):
     today = datetime.datetime.today().strftime('%Y-%m-%d')
     files = ['apps'] + compile_extra_files(date=today)
-    return compress_export(filename=today, files=files)
+    tarball = compress_export(filename=today, files=files)
+    link_latest_export(tarball)
+    return tarball
+
+
+def link_latest_export(tarball):
+    """
+    Atomically links basename(tarball) to
+    DUMPED_APPS_PATH/tarballs/latest.tgz.
+    """
+    tarball_name = os.path.basename(tarball)
+    target_dir = os.path.join(settings.DUMPED_APPS_PATH, 'tarballs')
+    target_file = os.path.join(target_dir, 'latest.tgz')
+    tmp_file = os.path.join(target_dir, '.latest.tgz')
+    if os.path.lexists(tmp_file):
+        os.unlink(tmp_file)
+
+    os.symlink(tarball_name, tmp_file)
+    os.rename(tmp_file, target_file)
+
+    return target_file
 
 
 def rm_directory(path):

@@ -17,8 +17,8 @@
         <dt>{{ _('Authors') }}</dt>
         <dd>
           <ol>
-            {% for usr in authors %}
-              <li><b>{{ usr.name }}</b> {{ emaillink(usr.email) }}</li>
+            {% for author in authors %}
+              <li><a href="{{ url('lookup.user_summary', author.id) }}">{{ author.name }}</a></li>
             {% endfor %}
           </ol>
         </dd>
@@ -30,30 +30,24 @@
             {{ _('None') }}
           {% endif %}
         </dd>
-        {% if app.is_webapp() %}
-          <dt>{{ _('Manifest') }}</dt>
-          <dd>
-              {% set manifest = app.get_manifest_url() %}
-              <a target="_blank" href="{{ manifest }}">{{ manifest }}</a>
-              <a href="#" id="view-manifest" data-manifest="{{ manifest }}"
-                 data-url="{{ url('reviewers.apps.review.manifest', app.app_slug) }}">
-                <b>{{ _('View') }}</b></a>
-          </dd>
-        {% endif %}
+        <dt>{{ _('Manifest') }}</dt>
+        <dd>
+            {% set manifest = app.get_manifest_url() %}
+            <a target="_blank" href="{{ manifest }}">{{ manifest }}</a>
+            <a href="#" id="view-manifest" data-manifest="{{ manifest }}"
+               data-url="{{ url('reviewers.apps.review.manifest', app.app_slug) }}">
+              <b>{{ _('View') }}</b></a>
+        </dd>
         <dt>{{ _('Type') }}</dt>
         <dd>
-          {% if app.is_webapp() %}
-            {% if app.is_packaged %}
-              {% if app.latest_version.is_privileged %}
-                {{ _('Privileged Packaged app') }};
-              {% else %}
-                {{ _('Packaged app') }};
-              {% endif %}
+          {% if app.is_packaged %}
+            {% if app.latest_version.is_privileged %}
+              {{ _('Privileged Packaged app') }};
             {% else %}
-              {{ _('Hosted app') }};
+              {{ _('Packaged app') }};
             {% endif %}
           {% else %}
-            {{ amo.ADDON_TYPE[app.type] }};
+            {{ _('Hosted app') }};
           {% endif %}
           {{ amo.ADDON_PREMIUM_TYPES[app.premium_type] }}
           {% if price %}
@@ -64,22 +58,26 @@
         <dd>{{ app.created|babel_datetime }}</dd>
         <dt>{{ _('Status') }}</dt>
         <dd>
+          {% if app.disabled_by_user %}
+            <p class="status-disabled">App is <b>disabled by user</b>.</p>
+          {% else %}
             <form method="post">
-            {{ csrf() }}
-            {% if action_allowed('Admin', '%') %}
-              <div class="change-status">
-                {{ status_form.status }}
-                <button data-api-url="{{ url('app-status-detail', pk=app.pk) }}" class="button disabled">{{ _('OK') }}</button>
-              </div>
-            {% else %}
-              {{ amo.MKT_STATUS_CHOICES[app.status] }}
-            {% endif %}
-            {% if app.priority_review %}
-              <button class="button disabled" name="prioritize">{{ _('Review Prioritized') }}</button>
-            {% else %}
-              <button class="button" type="submit" name="prioritize" value="true">{{ _('Prioritize Review?') }}</button>
-            {% endif %}
+              {{ csrf() }}
+              {% if action_allowed('Admin', '%') %}
+                <div class="change-status">
+                  {{ status_form.status }}
+                  <button data-api-url="{{ url('app-status-detail', pk=app.pk) }}" class="button disabled">{{ _('OK') }}</button>
+                </div>
+              {% else %}
+                {{ amo.MKT_STATUS_CHOICES[app.status] }}
+              {% endif %}
             </form>
+          {% endif %}
+          {% if app.priority_review %}
+            <button class="button disabled" name="prioritize">{{ _('Review Prioritized') }}</button>
+          {% else %}
+            <button class="button" type="submit" name="prioritize" value="true">{{ _('Prioritize Review?') }}</button>
+          {% endif %}
         </dd>
         <dt>{{ _('Abuse Reports') }}</dt>
         <dd>{{ abuse_reports }}</dd>

@@ -197,19 +197,10 @@ class WebappIndexer(BaseIndexer):
                 {'popularity_%s' % region: {'type': 'long'}})
 
         # Add fields that we expect to return all translations.
-        for field in ('banner_message', 'description', 'homepage', 'name',
-                      'release_notes', 'support_email', 'support_url'):
-            mapping[doc_type]['properties'].update({
-                '%s_translations' % field: {
-                    'type': 'object',
-                    'properties': {
-                        'lang': {'type': 'string',
-                                 'index': 'not_analyzed'},
-                        'string': {'type': 'string',
-                                   'index': 'not_analyzed'},
-                    }
-                }
-            })
+        cls.attach_translation_mappings(
+            mapping, ('banner_message', 'description', 'homepage',
+                      'name', 'release_notes', 'support_email',
+                      'support_url'))
 
         # Add room for language-specific indexes.
         for analyzer in amo.SEARCH_ANALYZER_MAP:
@@ -231,10 +222,19 @@ class WebappIndexer(BaseIndexer):
     @classmethod
     def extract_document(cls, pk, obj=None):
         """Extracts the ElasticSearch index document for this instance."""
-        from mkt.webapps.models import AppFeatures, Geodata, Installed, Webapp
+        from mkt.webapps.models import (AppFeatures, attach_devices,
+                                        attach_prices, attach_tags,
+                                        attach_translations, Geodata,
+                                        Installed, RatingDescriptors,
+                                        RatingInteractives, Webapp)
 
         if obj is None:
             obj = cls.get_model().objects.no_cache().get(pk=pk)
+
+        # Attach everything we need to index apps.
+        for transform in (attach_devices, attach_prices, attach_tags,
+                          attach_translations):
+            transform([obj])
 
         latest_version = obj.latest_version
         version = obj.current_version
@@ -259,7 +259,7 @@ class WebappIndexer(BaseIndexer):
         d['app_type'] = obj.app_type_id
         d['author'] = obj.developer_name
         d['banner_regions'] = geodata.banner_regions_slugs()
-        d['category'] = list(obj.categories.values_list('slug', flat=True))
+        d['category'] = obj.categories if obj.categories else []
         if obj.is_public:
             d['collection'] = [{'id': cms.collection_id, 'order': cms.order}
                                for cms in obj.collectionmembership_set.all()]
@@ -267,7 +267,10 @@ class WebappIndexer(BaseIndexer):
             d['collection'] = []
         d['content_ratings'] = (obj.get_content_ratings_by_body(es=True) or
                                 None)
-        d['content_descriptors'] = obj.get_descriptors_slugs()
+        try:
+            d['content_descriptors'] = obj.rating_descriptors.to_keys()
+        except RatingDescriptors.DoesNotExist:
+            d['content_descriptors'] = []
         d['current_version'] = version.version if version else None
         d['default_locale'] = obj.default_locale
         d['description'] = list(
@@ -276,7 +279,10 @@ class WebappIndexer(BaseIndexer):
         d['features'] = features
         d['has_public_stats'] = obj.public_stats
         d['icon_hash'] = obj.icon_hash
-        d['interactive_elements'] = obj.get_interactives_slugs()
+        try:
+            d['interactive_elements'] = obj.rating_interactives.to_keys()
+        except RatingInteractives.DoesNotExist:
+            d['interactive_elements'] = []
         d['is_escalated'] = is_escalated
         d['is_offline'] = getattr(obj, 'is_offline', False)
         if latest_version:
@@ -302,7 +308,8 @@ class WebappIndexer(BaseIndexer):
                        obj.addonuser_set.filter(role=amo.AUTHOR_ROLE_OWNER)]
         d['popularity'] = d['_boost'] = len(installed_ids)
         d['previews'] = [{'filetype': p.filetype, 'modified': p.modified,
-                          'id': p.id} for p in obj.previews.all()]
+                          'id': p.id, 'sizes': p.sizes}
+                         for p in obj.previews.all()]
         try:
             p = obj.addonpremium.price
             d['price_tier'] = p.name
@@ -426,8 +433,7 @@ class WebappIndexer(BaseIndexer):
         from mkt.webapps.models import Webapp
         sys.stdout.write('Indexing %s webapps\n' % len(ids))
 
-        qs = Webapp.indexing_transformer(Webapp.with_deleted.no_cache()
-                                         .filter(id__in=ids))
+        qs = Webapp.with_deleted.no_cache().filter(id__in=ids)
 
         docs = []
         for obj in qs:

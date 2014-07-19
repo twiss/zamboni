@@ -1,7 +1,6 @@
 from jingo import register, env
 import jinja2
 from tower import ugettext as _
-import waffle
 
 import mkt
 from mkt.submit.models import AppSubmissionChecklist
@@ -19,13 +18,7 @@ def del_by_key(data, delete):
 
 @register.function
 def progress(request, addon, step):
-    if addon and not addon.is_webapp():
-        return NotImplementedError
-
     steps = list(mkt.APP_STEPS)
-    if waffle.switch_is_active('iarc'):
-        # TODO: uncomment next_steps to mkt/constants/submit.
-        steps[3] = ('next_steps', _('Next Steps'))
 
     completed = []
 

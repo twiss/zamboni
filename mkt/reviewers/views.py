@@ -46,6 +46,7 @@ from mkt.api.authentication import (RestOAuthAuthentication,
 from mkt.api.authorization import GroupPermission
 from mkt.api.base import SlugOrIdMixin
 from mkt.comm.forms import CommAttachmentFormSet
+from mkt.constants import MANIFEST_CONTENT_TYPE
 from mkt.developers.models import ActivityLog, ActivityLogAttachment
 from mkt.files.models import File
 from mkt.ratings.forms import ReviewFlagFormSet
@@ -130,8 +131,6 @@ def home(request):
         request,
         reviews_total=ActivityLog.objects.total_reviews(webapp=True)[:5],
         reviews_monthly=ActivityLog.objects.monthly_reviews(webapp=True)[:5],
-        #new_editors=EventLog.new_editors(),  # Bug 747035
-        #eventlog=ActivityLog.objects.editor_events()[:6],  # Bug 746755
         progress=progress,
         percentage=percentage,
         durations=durations
@@ -169,12 +168,13 @@ def queue_counts(request):
         'escalated': EscalationQueue.objects.no_cache()
                                     .filter(addon__disabled_by_user=False)
                                     .count(),
-        'moderated': Review.objects.no_cache().filter(
-                                            addon__type=amo.ADDON_WEBAPP,
-                                            reviewflag__isnull=False,
-                                            editorreview=True)
-                                    .count(),
-
+        'moderated': Review.objects.no_cache()
+                           .exclude(Q(addon__isnull=True) |
+                                    Q(reviewflag__isnull=True))
+                           .exclude(addon__status=amo.STATUS_DELETED)
+                           .filter(addon__type=amo.ADDON_WEBAPP,
+                                   editorreview=True)
+                           .count(),
         'region_cn': Webapp.objects.pending_in_region(mkt.regions.CN).count(),
     }
 
@@ -202,7 +202,7 @@ def _progress():
     public_statuses = amo.WEBAPPS_APPROVED_STATUSES
 
     base_filters = {
-        'pending': (Webapp.objects.rated()
+        'pending': (Webapp.objects
                           .exclude(id__in=excluded_ids)
                           .filter(status=amo.STATUS_PENDING,
                                   disabled_by_user=False,
@@ -319,8 +319,8 @@ def _review(request, addon, version):
             if old_types != new_types:
                 # The reviewer overrode the device types. We need to not
                 # publish this app immediately.
-                if addon.make_public == amo.PUBLIC_IMMEDIATELY:
-                    addon.update(make_public=amo.PUBLIC_WAIT)
+                if addon.publish_type == amo.PUBLISH_IMMEDIATE:
+                    addon.update(publish_type=amo.PUBLISH_PRIVATE)
 
                 # And update the device types to what the reviewer set.
                 AddonDeviceType.objects.filter(addon=addon).delete()
@@ -343,8 +343,8 @@ def _review(request, addon, version):
             if old_features != new_features:
                 # The reviewer overrode the requirements. We need to not
                 # publish this app immediately.
-                if addon.make_public == amo.PUBLIC_IMMEDIATELY:
-                    addon.update(make_public=amo.PUBLIC_WAIT)
+                if addon.publish_type == amo.PUBLISH_IMMEDIATE:
+                    addon.update(publish_type=amo.PUBLISH_PRIVATE)
 
                 appfeatures_form.save(mark_for_rereview=False)
 
@@ -673,6 +673,7 @@ def queue_moderated(request):
     """Queue for reviewing app reviews."""
     rf = (Review.objects.no_cache()
                 .exclude(Q(addon__isnull=True) | Q(reviewflag__isnull=True))
+                .exclude(addon__status=amo.STATUS_DELETED)
                 .filter(addon__type=amo.ADDON_WEBAPP, editorreview=True)
                 .order_by('reviewflag__created'))
 
@@ -870,9 +871,8 @@ def reviewer_or_token_required(f):
 @reviewer_or_token_required
 def mini_manifest(request, addon, version_id):
     token = request.GET.get('token')
-    return http.HttpResponse(
-        _mini_manifest(addon, version_id, token),
-        content_type='application/x-web-app-manifest+json; charset=utf-8')
+    return http.HttpResponse(_mini_manifest(addon, version_id, token),
+                             content_type=MANIFEST_CONTENT_TYPE)
 
 
 def _mini_manifest(addon, version_id, token=None):
@@ -1012,7 +1012,7 @@ def attachment(request, attachment):
     else:
         filename = urllib.quote(a.filename())
         response = http.HttpResponse(fsock,
-                                     mimetype='application/force-download')
+                                     content_type='application/force-download')
         response['Content-Disposition'] = 'attachment; filename=%s' % filename
         response['Content-Length'] = os.path.getsize(full_path)
     return response

@@ -23,12 +23,13 @@ from mkt.collections.models import Collection
 from mkt.collections.serializers import CollectionSerializer
 from mkt.features.utils import get_feature_profile
 from mkt.search.forms import ApiSearchForm, TARAKO_CATEGORIES_MAPPING
-from mkt.search.serializers import (ESAppSerializer, RocketbarESAppSerializer,
-                                    SuggestionsESAppSerializer)
 from mkt.search.utils import S
 from mkt.translations.helpers import truncate
 from mkt.webapps.indexers import WebappIndexer
 from mkt.webapps.models import Webapp
+from mkt.webapps.serializers import (ESAppSerializer, RocketbarESAppSerializer,
+                                     RocketbarESAppSerializerV2,
+                                     SuggestionsESAppSerializer)
 
 
 DEFAULT_SORTING = {
@@ -327,3 +328,7 @@ class RocketbarView(SearchView):
         # anonymous, so we're fine.
         return HttpResponse(json.dumps(serializer.data),
                             content_type='application/x-rocketbar+json')
+
+
+class RocketbarViewV2(RocketbarView):
+    serializer_class = RocketbarESAppSerializerV2

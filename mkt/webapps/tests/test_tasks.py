@@ -209,8 +209,8 @@ class TestUpdateManifest(amo.tests.TestCase):
         assert mock_.called
 
     @mock.patch('mkt.webapps.tasks._update_manifest')
-    def test_waiting(self, mock_):
-        self.addon.update(status=amo.STATUS_PUBLIC_WAITING)
+    def test_approved(self, mock_):
+        self.addon.update(status=amo.STATUS_APPROVED)
         call_command('process_addons', task='update_manifests')
         assert mock_.called
 
@@ -517,6 +517,9 @@ class TestDumpApps(amo.tests.TestCase):
             ok_(os.path.exists(os.path.join(settings.DUMPED_APPS_PATH, f)))
         ok_(os.stat(fn)[stat.ST_SIZE])
 
+        latest_tgz = os.path.join(os.path.dirname(fn), 'latest.tgz')
+        ok_(os.readlink(latest_tgz) == os.path.basename(fn))
+
     @mock.patch('mkt.webapps.tasks.dump_app')
     def test_not_public(self, dump_app):
         app = Addon.objects.get(pk=337141)
@@ -605,8 +608,8 @@ class TestFixMissingIcons(amo.tests.TestCase):
         assert mock_.called
 
     @mock.patch('mkt.webapps.tasks._fix_missing_icons')
-    def test_public_waiting(self, mock_):
-        self.app.update(status=amo.STATUS_PUBLIC_WAITING)
+    def test_approved(self, mock_):
+        self.app.update(status=amo.STATUS_APPROVED)
         call_command('process_addons', task='fix_missing_icons')
         assert mock_.called
 

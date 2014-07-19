@@ -27,7 +27,7 @@
         </h2>
         <li class="done"><span>{{ _('Submit App Manifest') }}</span></li>
         <li class="done"><span>{{ _('Enter App Details') }}</span></li>
-        <li{% if addon.content_ratings_complete() %} class="done"{% endif %}>
+        <li{% if addon.is_rated() %} class="done"{% endif %}>
           {%- trans rating_url=addon.get_dev_url('ratings') %}
             <span>Set up <a href="{{ rating_url }}">Content Ratings</a></span>
           {% endtrans -%}
@@ -39,7 +39,7 @@
             {% endtrans %}
           </li>
         {% endif %}
-        <li{% if public or addon.is_public_waiting() %} class="done"{% endif %}><span>{{ _('Wait for Review') }}</span></li>
+        <li{% if public or addon.is_approved() %} class="done"{% endif %}><span>{{ _('Wait for Review') }}</span></li>
         <li{% if public %} class="done"{% endif %}><span>{{ _('Publish') }}</span></li>
       </ol>
 
@@ -59,7 +59,7 @@
 
       <p>
         {# Tell the developer what's happens after review based on public-waiting. #}
-        {% if addon.make_public == amo.PUBLIC_WAIT %}
+        {% if addon.publish_type == amo.PUBLISH_PRIVATE %}
           {% trans url=addon.get_dev_url('versions') %}
             Once your app is reviewed, you will have to manually
             publish your app from <a href="{{ url }}">Manage Status</a>.
@@ -89,7 +89,7 @@
               <strong>What's next:</strong> Set up {{ next_step_name }}
             {% endtrans %}
           </span>
-        {% elif addon.is_public_waiting() %}
+        {% elif addon.is_approved() %}
           <span>
             {% trans %}
               <strong>What's next:</strong> Publish Your App

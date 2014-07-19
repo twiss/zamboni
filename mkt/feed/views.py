@@ -19,6 +19,7 @@ from mkt.feed.indexers import (FeedAppIndexer, FeedBrandIndexer,
 from mkt.webapps.models import Webapp
 
 from .authorization import FeedAuthorization
+from .constants import FEED_TYPE_SHELF
 from .models import FeedApp, FeedBrand, FeedCollection, FeedItem, FeedShelf
 from .serializers import (FeedAppSerializer, FeedBrandSerializer,
                           FeedCollectionSerializer, FeedItemSerializer,
@@ -84,12 +85,12 @@ class RegionCarrierFilter(BaseFilterBackend):
         q = request.QUERY_PARAMS
 
         # Filter for only the region if specified.
-        if q.get('region'):
-            region_id =mkt.regions.REGIONS_DICT[q['region']].id
+        if q.get('region') and q.get('region') in mkt.regions.REGIONS_DICT:
+            region_id = mkt.regions.REGIONS_DICT[q['region']].id
             qs = qs.filter(region=region_id)
 
         # Exclude feed items that specify carrier but do not match carrier.
-        if q.get('carrier'):
+        if q.get('carrier') and q.get('carrier') in mkt.carriers.CARRIER_MAP:
             carrier = mkt.carriers.CARRIER_MAP[q['carrier']].id
             qs = qs.exclude(~Q(carrier=carrier), carrier__isnull=False)
 
@@ -107,7 +108,7 @@ class FeedItemViewSet(CORSMixin, viewsets.ModelViewSet):
     permission_classes = [AnyOf(AllowReadOnly,
                                 GroupPermission('Feed', 'Curate'))]
     filter_backends = (OrderingFilter, RegionCarrierFilter)
-    queryset = FeedItem.objects.all()
+    queryset = FeedItem.objects.no_cache().all()
     cors_allowed_methods = ('get', 'delete', 'post', 'put', 'patch')
     serializer_class = FeedItemSerializer
 
@@ -184,33 +185,21 @@ class FeedAppViewSet(CORSMixin, MarketplaceView, SlugOrIdMixin,
         return response.Response(serializer.data)
 
 
-class FeedAppImageViewSet(CollectionImageViewSet):
-    queryset = FeedApp.objects.all()
-
-
-class FeedCollectionImageViewSet(CollectionImageViewSet):
-    queryset = FeedCollection.objects.all()
-
-
-class FeedShelfImageViewSet(CollectionImageViewSet):
-    queryset = FeedShelf.objects.all()
-
-
 class FeedBrandViewSet(BaseFeedCollectionViewSet):
     """
     A viewset for the FeedBrand class, a type of collection that allows editors
     to quickly create content without involving localizers.
     """
-    serializer_class = FeedBrandSerializer
     queryset = FeedBrand.objects.all()
+    serializer_class = FeedBrandSerializer
 
 
 class FeedCollectionViewSet(BaseFeedCollectionViewSet):
     """
     A viewset for the FeedCollection class.
     """
-    serializer_class = FeedCollectionSerializer
     queryset = FeedCollection.objects.all()
+    serializer_class = FeedCollectionSerializer
 
     def set_apps_grouped(self, obj, apps):
         if apps:
@@ -234,8 +223,8 @@ class FeedShelfViewSet(BaseFeedCollectionViewSet):
     """
     A viewset for the FeedShelf class.
     """
-    serializer_class = FeedShelfSerializer
     queryset = FeedShelf.objects.all()
+    serializer_class = FeedShelfSerializer
 
 
 class FeedShelfPublishView(CORSMixin, APIView):
@@ -274,6 +263,18 @@ class FeedShelfPublishView(CORSMixin, APIView):
                                  status=status.HTTP_201_CREATED)
 
 
+class FeedAppImageViewSet(CollectionImageViewSet):
+    queryset = FeedApp.objects.all()
+
+
+class FeedCollectionImageViewSet(CollectionImageViewSet):
+    queryset = FeedCollection.objects.all()
+
+
+class FeedShelfImageViewSet(CollectionImageViewSet):
+    queryset = FeedShelf.objects.all()
+
+
 class FeedElementSearchView(CORSMixin, APIView):
     """
     Search view for the Curation Tools.
@@ -293,13 +294,6 @@ class FeedElementSearchView(CORSMixin, APIView):
             'slop': 4,
         }
 
-    def _fuzzy(self, q):
-        return {
-            'query': q,
-            'type': 'fuzzy',
-            'fuzziness': 4,
-        }
-
     def get(self, request, *args, **kwargs):
         q = request.GET.get('q')
 
@@ -309,15 +303,19 @@ class FeedElementSearchView(CORSMixin, APIView):
             'type__match': self._phrase(q),
             'should': True
         }
+
         feed_app_ids = ([pk[0] for pk in S(FeedAppIndexer).query(
-            name__match=self._fuzzy(q), **query).values_list('id')])
+            search_names__fuzzy=q, **query).values_list('id')])
+
         feed_brand_ids = [pk[0] for pk in S(FeedBrandIndexer).query(
             **query).values_list('id')]
+
         feed_collection_ids = ([pk[0] for pk in S(FeedCollectionIndexer).query(
-            name__match=self._fuzzy(q), **query).values_list('id')])
+            search_names__fuzzy=q, **query).values_list('id')])
+
         feed_shelf_ids = ([pk[0] for pk in S(FeedShelfIndexer).query(
-            name__match=self._fuzzy(q), slug__match=self._fuzzy(q),
-            carrier__prefix=q, region=q, should=True).values_list('id')])
+            search_names__fuzzy=q, slug__fuzzy=q, carrier__prefix=q, region=q,
+            should=True).values_list('id')])
 
         # Dehydrate.
         apps = FeedApp.objects.filter(id__in=feed_app_ids)
@@ -342,3 +340,27 @@ class FeedElementSearchView(CORSMixin, APIView):
             'collections': collections,
             'shelves': shelves
         })
+
+
+class FeedView(CORSMixin, APIView):
+    """
+    Streamlined view for a feed, separating operator shelves for ease of
+    consumer display.
+    """
+    authentication_classes = []
+    permission_classes = []
+    cors_allowed_methods = ('get',)
+
+    def get(self, request, *args, **kwargs):
+        filterer = RegionCarrierFilter()
+        data = {
+            'feed': [],
+            'shelf': None
+        }
+        feed = filterer.filter_queryset(request, FeedItem.objects.all(), self)
+        data['feed'] = FeedItemSerializer(feed).data
+        for index, item in enumerate(data['feed']):
+            if item['item_type'] == FEED_TYPE_SHELF:
+                data['shelf'] = data['feed'].pop(index)
+                break
+        return response.Response(data, status=status.HTTP_200_OK)

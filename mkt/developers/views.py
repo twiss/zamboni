@@ -1,4 +1,5 @@
 import json
+import mimetypes
 import os
 import sys
 import time
@@ -50,7 +51,8 @@ from mkt.developers.forms import (APIConsumerForm, AppFormBasic, AppFormDetails,
 from mkt.developers.models import AppLog, PreloadTestPlan
 from mkt.developers.serializers import ContentRatingSerializer
 from mkt.developers.tasks import run_validator, save_test_plan
-from mkt.developers.utils import check_upload, handle_vip
+from mkt.developers.utils import (
+    check_upload, escalate_prerelease_permissions, handle_vip)
 from mkt.files.models import File, FileUpload
 from mkt.files.utils import parse_addon
 from mkt.purchase.models import Contribution
@@ -177,10 +179,10 @@ def disable(request, addon_id, addon):
 @dev_required
 @post_required
 def publicise(request, addon_id, addon):
-    if addon.status == amo.STATUS_PUBLIC_WAITING:
+    if addon.status == amo.STATUS_APPROVED:
         addon.update(status=amo.STATUS_PUBLIC)
         File.objects.filter(
-            version__addon=addon, status=amo.STATUS_PUBLIC_WAITING).update(
+            version__addon=addon, status=amo.STATUS_APPROVED).update(
                 status=amo.STATUS_PUBLIC)
         amo.log(amo.LOG.CHANGE_STATUS, addon.get_status_display(), addon)
         # Call update_version, so various other bits of data update.
@@ -188,9 +190,7 @@ def publicise(request, addon_id, addon):
         # Call to update names and locales if changed.
         addon.update_name_from_package_manifest()
         addon.update_supported_locales()
-
-        if waffle.switch_is_active('iarc'):
-            addon.set_iarc_storefront_data()
+        addon.set_iarc_storefront_data()
 
     return redirect(addon.get_dev_url('versions'))
 
@@ -203,7 +203,7 @@ def status(request, addon_id, addon):
 
     if request.method == 'POST':
         if 'resubmit-app' in request.POST and form.is_valid():
-            if waffle.switch_is_active('iarc') and not addon.is_rated():
+            if not addon.is_rated():
                 # Cannot resubmit without content ratings.
                 return http.HttpResponseForbidden(
                     'This app must obtain content ratings before being '
@@ -220,17 +220,17 @@ def status(request, addon_id, addon):
             return redirect(addon.get_dev_url('versions'))
 
         elif 'upload-version' in request.POST and upload_form.is_valid():
-            mobile_only = (addon.latest_version and
-                           addon.latest_version.features.has_qhd)
-
-            ver = Version.from_upload(upload_form.cleaned_data['upload'],
-                                      addon, [amo.PLATFORM_ALL])
+            upload = upload_form.cleaned_data['upload']
+            ver = Version.from_upload(upload, addon, [amo.PLATFORM_ALL])
 
             # Update addon status now that the new version was saved.
             addon.update_status()
 
             res = run_validator(ver.all_files[0].file_path)
             validation_result = json.loads(res)
+
+            # Escalate the version if it uses prerelease permissions.
+            escalate_prerelease_permissions(addon, validation_result, ver)
 
             # Set all detected features as True and save them.
             keys = ['has_%s' % feature.lower()
@@ -241,6 +241,8 @@ def status(request, addon_id, addon):
             qhd_devices = (set((amo.DEVICE_GAIA,)),
                            set((amo.DEVICE_MOBILE,)),
                            set((amo.DEVICE_GAIA, amo.DEVICE_MOBILE,)))
+            mobile_only = (addon.latest_version and
+                           addon.latest_version.features.has_qhd)
             if set(addon.device_types) in qhd_devices or mobile_only:
                 data['has_qhd'] = True
 
@@ -249,7 +251,7 @@ def status(request, addon_id, addon):
 
             messages.success(request, _('New version successfully added.'))
             log.info('[Webapp:%s] New version created id=%s from upload: %s'
-                     % (addon, ver.pk, upload_form.cleaned_data['upload']))
+                     % (addon, ver.pk, upload))
 
             if addon.vip_app:
                 handle_vip(addon, ver, request.amo_user)
@@ -323,7 +325,6 @@ def _ratings_success_msg(app, old_status, old_modified):
         return _submission_msgs()['content_ratings_saved']
 
 
-@waffle_switch('iarc')
 @dev_required
 def content_ratings(request, addon_id, addon):
     if not addon.is_rated():
@@ -344,7 +345,6 @@ def content_ratings(request, addon_id, addon):
                   {'addon': addon})
 
 
-@waffle_switch('iarc')
 @dev_required
 def content_ratings_edit(request, addon_id, addon):
     initial = {}
@@ -401,11 +401,14 @@ def preload_submit(request, addon_id, addon):
         if form.is_valid():
             # Save test plan file.
             test_plan = request.FILES['test_plan']
+
             # Figure the type to save it as (cleaned as pdf/xls from the form).
-            if test_plan.content_type == 'application/pdf':
+            filetype = mimetypes.guess_type(test_plan.name)[0]
+            if 'pdf' in filetype:
                 filename = 'test_plan_%s.pdf'
             else:
                 filename = 'test_plan_%s.xls'
+
             # Timestamp.
             filename = filename % str(time.time()).split('.')[0]
             save_test_plan(request.FILES['test_plan'], filename, addon)
@@ -476,7 +479,7 @@ def version_edit(request, addon_id, addon, version_id):
 def version_publicise(request, addon_id, addon):
     version_id = request.POST.get('version_id')
     version = get_object_or_404(Version, pk=version_id, addon=addon)
-    if version.all_files[0].status == amo.STATUS_PUBLIC_WAITING:
+    if version.all_files[0].status == amo.STATUS_APPROVED:
         File.objects.filter(version=version).update(status=amo.STATUS_PUBLIC)
         amo.log(amo.LOG.CHANGE_VERSION_STATUS, unicode(version.status[0]),
                 version)
@@ -484,9 +487,9 @@ def version_publicise(request, addon_id, addon):
         addon.update_version()
 
         # If the version we are publishing is the current_version one, and the
-        # app was in waiting state as well, update the app status.
+        # app was in approved state as well, update the app status.
         if (version == addon.current_version and
-                addon.status == amo.STATUS_PUBLIC_WAITING):
+                addon.status == amo.STATUS_APPROVED):
             addon.update(status=amo.STATUS_PUBLIC)
             amo.log(amo.LOG.CHANGE_STATUS, addon.get_status_display(), addon)
 
@@ -555,8 +558,8 @@ def ownership(request, addon_id, addon):
 
 
 @anonymous_csrf
-def validate_addon(request):
-    return render(request, 'developers/validate_addon.html', {
+def validate_app(request):
+    return render(request, 'developers/validate_app.html', {
         'upload_hosted_url':
             reverse('mkt.developers.standalone_hosted_upload'),
         'upload_packaged_url':
@@ -735,7 +738,6 @@ def json_upload_detail(request, upload, addon=None):
 def upload_validation_context(request, upload, addon=None, url=None):
     if not settings.VALIDATE_ADDONS:
         upload.task_error = ''
-        upload.is_webapp = True
         upload.validation = json.dumps({'errors': 0, 'messages': [],
                                         'metadata': {}, 'notices': 0,
                                         'warnings': 0})

@@ -9,6 +9,7 @@ SERVER_EMAIL = 'zmktlandfill@addons.mozilla.org'
 
 DOMAIN = "landfill-mkt.allizom.org"
 SITE_URL = 'https://landfill-mkt.allizom.org'
+BROWSERID_AUDIENCES = [SITE_URL]
 STATIC_URL = 'https://landfill-mkt-cdn.allizom.org/'
 LOCAL_MIRROR_URL = '%s_files' % STATIC_URL
 MIRROR_URL = LOCAL_MIRROR_URL
@@ -44,7 +45,7 @@ STATSD_PREFIX = 'marketplace-landfill'
 ## Celery
 BROKER_URL = private_mkt.BROKER_URL
 
-CELERY_ALWAYS_EAGER = False
+CELERY_ALWAYS_EAGER = True
 CELERY_IGNORE_RESULT = True
 CELERY_DISABLE_RATE_LIMITS = True
 CELERYD_PREFETCH_MULTIPLIER = 1

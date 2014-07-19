@@ -307,6 +307,20 @@ class NI(REGION):
     ratingsbody = ratingsbodies.ESRB
 
 
+class FR(REGION):
+    id = 30
+    name = _lazy(u'France')
+    slug = 'fr'
+    default_currency = 'EUR'
+    default_language = 'fr'
+    mcc = 208
+    ratingsbody = ratingsbodies.PEGI
+
+
+# Note: When adding a new region, don't forget to include the country code to
+# the file: media/css/devreg/payments.styl
+
+
 # Create a list of tuples like so (in alphabetical order):
 #
 #     [('restofworld', <class 'mkt.constants.regions.RESTOFWORLD'>),
@@ -354,13 +368,7 @@ GENERIC_RATING_REGION_SLUG = 'generic'
 
 def ALL_REGIONS_WITH_CONTENT_RATINGS():
     """Regions that have ratings bodies."""
-    import waffle
-
-    if waffle.switch_is_active('iarc'):
-        return [x for x in ALL_REGIONS if x.ratingsbody]
-
-    # Only require content ratings in Brazil/Germany without IARC switch.
-    return [BR, DE]
+    return [x for x in ALL_REGIONS if x.ratingsbody]
 
 
 def ALL_REGIONS_WITHOUT_CONTENT_RATINGS():
@@ -377,8 +385,6 @@ def REGION_TO_RATINGS_BODY():
 
     e.g. {'us': 'esrb', 'mx': 'esrb', 'es': 'pegi', 'br': 'classind'}.
     """
-    import waffle
-
     # Create the mapping.
     region_to_bodies = {}
     for region in ALL_REGIONS_WITH_CONTENT_RATINGS():
@@ -386,12 +392,6 @@ def REGION_TO_RATINGS_BODY():
         if region.ratingsbody:
             ratings_body_label = slugify_iarc_name(region.ratingsbody)
         region_to_bodies[region.slug] = ratings_body_label
-
-    # Resolve edge cases related to switches.
-    if not waffle.switch_is_active('iarc'):
-        region_to_bodies.update({
-            'de': GENERIC_RATING_REGION_SLUG
-        })
 
     return region_to_bodies
 

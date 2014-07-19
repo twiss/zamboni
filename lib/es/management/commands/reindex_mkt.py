@@ -1,7 +1,7 @@
 """
 Marketplace ElasticSearch Indexer.
 
-Currently indexes apps and feed elements.
+Currently creates the indexes and re-indexes apps and feed elements.
 """
 import logging
 import os
@@ -9,7 +9,7 @@ import sys
 import time
 from optparse import make_option
 
-import pyelasticsearch
+import elasticsearch
 from celery import task
 
 from django.conf import settings
@@ -25,36 +25,34 @@ logger = logging.getLogger('z.elasticsearch')
 
 
 # Enable these to get full debugging information.
-# logging.getLogger('pyelasticsearch').setLevel(logging.DEBUG)
-# logging.getLogger('requests').setLevel(logging.DEBUG)
-
+# logging.getLogger('elasticsearch').setLevel(logging.DEBUG)
+# logging.getLogger('elasticsearch.trace').setLevel(logging.DEBUG)
 
 # The subset of settings.ES_INDEXES we are concerned with.
+# Referenced from amo.tests.ESTestCase so update that if you are modifying the
+# structure of INDEXES.
+ES_INDEXES = settings.ES_INDEXES
 INDEXES = (
     # Index, Indexer, chunk size.
-    (settings.ES_INDEXES['webapp'], WebappIndexer, 100),
+    (ES_INDEXES['webapp'], WebappIndexer, 100),
     # Currently using 500 since these are manually created by a curator and
     # there will probably never be this many.
-    (settings.ES_INDEXES['mkt_feed_app'], f_indexers.FeedAppIndexer, 500),
-    (settings.ES_INDEXES['mkt_feed_brand'], f_indexers.FeedBrandIndexer, 500),
-    (settings.ES_INDEXES['mkt_feed_collection'],
-     f_indexers.FeedCollectionIndexer, 500),
-    (settings.ES_INDEXES['mkt_feed_shelf'], f_indexers.FeedShelfIndexer, 500),
+    (ES_INDEXES['mkt_feed_app'], f_indexers.FeedAppIndexer, 500),
+    (ES_INDEXES['mkt_feed_brand'], f_indexers.FeedBrandIndexer, 500),
+    (ES_INDEXES['mkt_feed_collection'], f_indexers.FeedCollectionIndexer, 500),
+    (ES_INDEXES['mkt_feed_shelf'], f_indexers.FeedShelfIndexer, 500),
+    # Currently using 1000 since FeedItem documents are pretty small.
+    (ES_INDEXES['mkt_feed_item'], f_indexers.FeedItemIndexer, 1000),
 )
 
 INDEX_DICT = {
     # In case we want to index only a subset of indexes.
-    'webapp': [INDEXES[0]],
-    'feed': [INDEXES[1], INDEXES[2], INDEXES[3], INDEXES[4]],
+    'apps': [INDEXES[0]],
+    'feed': [INDEXES[1], INDEXES[2], INDEXES[3], INDEXES[4], INDEXES[5]],
+    'feeditems': [INDEXES[5]],
 }
 
-if hasattr(settings, 'ES_URLS'):
-    ES_URL = settings.ES_URLS[0]
-else:
-    ES_URL = 'http://127.0.0.1:9200'
-
-
-ES = pyelasticsearch.ElasticSearch(ES_URL)
+ES = elasticsearch.Elasticsearch(hosts=settings.ES_HOSTS)
 
 
 job = 'lib.es.management.commands.reindex_mkt.run_indexing'
@@ -65,7 +63,7 @@ time_limits = settings.CELERY_TIME_LIMITS[job]
 def delete_index(old_index):
     """Removes the index."""
     sys.stdout.write('Removing index %r\n' % old_index)
-    ES.delete_index(old_index)
+    ES.indices.delete(index=old_index)
 
 
 @task
@@ -88,12 +86,14 @@ def create_index(new_index, alias, indexer, settings):
 
     # Create index and mapping.
     try:
-        ES.create_index(new_index, settings)
-    except pyelasticsearch.exceptions.IndexAlreadyExistsError:
-        raise CommandError('New index [%s] already exists' % new_index)
+        ES.indices.create(index=new_index, body=settings)
+    except elasticsearch.ElasticsearchException as e:
+        raise CommandError('ERROR: New index [%s] already exists? %s'
+                           % (new_index, e))
 
     # Don't return until the health is green. By default waits for 30s.
-    ES.health(new_index, wait_for_status='green', wait_for_relocating_shards=0)
+    ES.cluster.health(index=new_index, wait_for_status='green',
+                      wait_for_relocating_shards=0)
 
 
 @task(time_limit=time_limits['hard'], soft_time_limit=time_limits['soft'])
@@ -147,10 +147,10 @@ def update_alias(new_index, old_index, alias, settings):
     sys.stdout.write('Optimizing, updating settings and aliases.\n')
 
     # Optimize.
-    ES.optimize(new_index)
+    ES.indices.optimize(index=new_index)
 
     # Update the replicas.
-    ES.update_settings(new_index, settings)
+    ES.indices.put_settings(index=new_index, body=settings)
 
     # Add and remove aliases.
     actions = [
@@ -160,14 +160,14 @@ def update_alias(new_index, old_index, alias, settings):
         actions.append(
             {'remove': {'index': old_index, 'alias': alias}}
         )
-    ES.update_aliases(dict(actions=actions))
+    ES.indices.update_aliases(body=dict(actions=actions))
 
 
 @task
 def output_summary():
     alias_output = ''
     for ALIAS, INDEXER, CHUNK_SIZE in INDEXES:
-        alias_output += unicode(ES.aliases(ALIAS)) + '\n'
+        alias_output += unicode(ES.indices.get_aliases(index=ALIAS)) + '\n'
     sys.stdout.write(
         'Reindexation done. Current Aliases configuration: %s\n' %
         alias_output)
@@ -215,8 +215,8 @@ class Command(BaseCommand):
         for ALIAS, INDEXER, CHUNK_SIZE in INDEXES:
             # Get the old index if it exists.
             try:
-                aliases = ES.aliases(ALIAS).keys()
-            except pyelasticsearch.exceptions.ElasticHttpNotFoundError:
+                aliases = ES.indices.get_alias(name=ALIAS).keys()
+            except elasticsearch.NotFoundError:
                 aliases = []
             old_index = aliases[0] if aliases else None
             old_indexes.append(old_index)
@@ -227,9 +227,9 @@ class Command(BaseCommand):
             # See how the index is currently configured.
             if old_index:
                 try:
-                    s = (ES.get_settings(old_index).get(old_index, {})
-                                                   .get('settings', {}))
-                except pyelasticsearch.exceptions.ElasticHttpNotFoundError:
+                    s = (ES.indices.get_settings(index=old_index).get(
+                        old_index, {}).get('settings', {}))
+                except elasticsearch.NotFoundError:
                     s = {}
             else:
                 s = {}

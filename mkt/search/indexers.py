@@ -3,6 +3,9 @@ import sys
 
 from django.conf import settings
 
+import elasticsearch
+from celeryutils import task
+from elasticsearch import helpers
 from elasticutils.contrib.django import Indexable, MappingType
 
 import amo
@@ -22,7 +25,72 @@ class BaseIndexer(MappingType, Indexable):
     - get_model(cls)
     - get_mapping(cls)
     - extract_document(cls, obj_id, obj=None)
+
     """
+
+    _es = {}
+
+    @classmethod
+    def _key(cls, es_settings):
+        """
+        Create a hashed key based on settings.
+
+        This allows us to cache Elasticsearch objects based on settings.
+
+        """
+        es_settings = sorted(es_settings.items(), key=lambda item: item[0])
+        es_settings = repr([(k, v) for k, v in es_settings])
+        return tuple(es_settings)
+
+    @classmethod
+    def get_es(cls, **overrides):
+        """
+        Returns an Elasticsearch object using Django settings.
+
+        We override elasticutil's `get_es` because we're using the official
+        elasticsearch client library.
+
+        """
+        defaults = {
+            'hosts': settings.ES_HOSTS,
+            'timeout': getattr(settings, 'ES_TIMEOUT', 10),
+        }
+        defaults.update(overrides)
+
+        key = cls._key(defaults)
+        if key in cls._es:
+            return cls._es[key]
+
+        es = elasticsearch.Elasticsearch(**defaults)
+        cls._es[key] = es
+        return es
+
+    @classmethod
+    def index(cls, document, id_=None, es=None, index=None):
+        """
+        We override elasticutil's index because we're using the official
+        elasticsearch client library.
+        """
+        es = es or cls.get_es()
+        index = index or cls.get_index()
+        es.index(index=index, doc_type=cls.get_mapping_type_name(),
+                 body=document, id=id_)
+
+    @classmethod
+    def bulk_index(cls, documents, id_field='id', es=None, index=None):
+        """
+        We override elasticutil's bulk_index because we're using the official
+        elasticsearch client library.
+        """
+        es = es or cls.get_es()
+        index = index or cls.get_index()
+        type = cls.get_mapping_type_name()
+
+        actions = [
+            {'_index': index, '_type': type, '_id': d['id'], '_source': d}
+            for d in documents]
+
+        helpers.bulk(es, actions)
 
     @classmethod
     def get_index(cls):
@@ -118,13 +186,52 @@ class BaseIndexer(MappingType, Indexable):
     @classmethod
     def setup_mapping(cls):
         """Creates the ES index/mapping."""
-        cls.get_es().create_index(cls.get_index(),
-                                  {'mappings': cls.get_mapping(),
-                                   'settings': cls.get_settings()})
+        cls.get_es().indices.create(
+            index=cls.get_index(), body={'mappings': cls.get_mapping(),
+                                         'settings': cls.get_settings()})
 
     @classmethod
     def get_indexable(cls):
         return cls.get_model().objects.order_by('-id')
+
+    @classmethod
+    @task
+    def unindexer(cls, ids=None, _all=False, index=None):
+        """
+        Empties an index, but doesn't delete it. Useful for tearDowns.
+
+        ids -- list of IDs to unindex.
+        _all -- unindex all objects.
+        """
+        if _all:
+            # Mostly used for test tearDowns.
+            qs = cls.get_model()
+            if hasattr(qs, 'with_deleted'):
+                qs = qs.with_deleted
+            else:
+                qs = qs.objects
+            ids = list(qs.order_by('id').values_list('id', flat=True))
+        if not ids:
+            return
+
+        task_log.info('Unindexing %s %s-%s. [%s]' %
+                      (cls.get_model()._meta.model_name, ids[0], ids[-1],
+                       len(ids)))
+
+        index = index or cls.get_index()
+        # Note: If reindexing is currently occurring, `get_indices` will return
+        # more than one index.
+        indices = Reindexing.get_indices(index)
+
+        es = cls.get_es(urls=settings.ES_URLS)
+        for id_ in ids:
+            for idx in indices:
+                try:
+                    cls.unindex(id_=id_, es=es, index=idx)
+                except elasticsearch.ElasticHttpNotFoundError:
+                    # Ignore if it's not there.
+                    task_log.info(u'[%s:%s] object not found in index' %
+                                  (cls.get_model()._meta.model_name, id_))
 
     @classmethod
     def run_indexing(cls, ids, ES, index=None, **kw):
@@ -145,7 +252,30 @@ class BaseIndexer(MappingType, Indexable):
                     cls.get_model()._meta.model_name, obj.id, e))
 
         # Index.
-        cls.bulk_index(docs, es=ES, index=index or cls.get_index())
+        if docs:
+            cls.bulk_index(docs, es=ES, index=index or cls.get_index())
+
+    @classmethod
+    def attach_translation_mappings(cls, mapping, field_names):
+        """
+        For each field in field name, attach a mapping property to the ES
+        mapping that appends "_translations" to the key, and has type string
+        that is not_analyzed.
+        """
+        for field_name in field_names:
+            # _translations is the suffix in TranslationSerializer.
+            mapping[cls.get_mapping_type_name()]['properties'].update({
+                '%s_translations' % field_name: {
+                    'type': 'object',
+                    'properties': {
+                        'lang': {'type': 'string',
+                                 'index': 'not_analyzed'},
+                        'string': {'type': 'string',
+                                   'index': 'not_analyzed'},
+                    }
+                }
+            })
+        return mapping
 
 
 @post_request_task(acks_late=True)

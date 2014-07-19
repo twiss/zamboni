@@ -1,3 +1,13 @@
+// Send the Authorization header to local URLs.
+(function (require) {
+    $(document).ajaxSend(function(event, xhr, ajaxSettings) {
+        var userToken = require('login').userToken();
+        if (isLocalUrl(ajaxSettings.url) && userToken) {
+            xhr.setRequestHeader('Authorization', 'mkt-shared-secret ' + userToken);
+        }
+    });
+})(require);
+
 $(document).ready(function() {
     // Edit Add-on
     if (document.getElementById('edit-addon')) {
@@ -967,25 +977,17 @@ function initCatFields(delegate) {
     var $delegate = $(delegate || '#addon-categories-edit');
     $delegate.find('div.addon-app-cats').each(function() {
         var $parent = $(this).closest("[data-max-categories]"),
-            $main = $(this).find(".addon-categories"),
-            $misc = $(this).find(".addon-misc-category"),
+            $categories = $(this).find(".addon-categories"),
             maxCats = parseInt($parent.attr("data-max-categories"), 10);
-        var checkMainDefault = function() {
-            var checkedLength = $("input:checked", $main).length,
+
+        var checkNumberOfCategories = function() {
+            var checkedLength = $("input:checked", $categories).length,
                 disabled = checkedLength >= maxCats;
-            $("input:not(:checked)", $main).attr("disabled", disabled);
+            $("input:not(:checked)", $categories).attr("disabled", disabled);
             return checkedLength;
         };
-        var checkMain = function() {
-            var checkedLength = checkMainDefault();
-            $("input", $misc).attr("checked", checkedLength <= 0);
-        };
-        var checkOther = function() {
-            $("input", $main).attr("checked", false).attr("disabled", false);
-        };
-        checkMainDefault();
-        $('input', $main).on('change', checkMain);
-        $('input', $misc).on('change', checkOther);
+        checkNumberOfCategories();
+        $('input', $categories).on('change', checkNumberOfCategories);
     });
 }
 

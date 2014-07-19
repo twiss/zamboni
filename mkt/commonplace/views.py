@@ -11,6 +11,7 @@ from django.shortcuts import render
 import jingo
 import jinja2
 import newrelic.agent
+import waffle
 
 from cache_nuggets.lib import memoize
 
@@ -51,9 +52,12 @@ def commonplace(request, repo, **kwargs):
 
     BUILD_ID = get_build_id(repo)
 
-    site_settings = {
-        'persona_unverified_issuer': settings.BROWSERID_DOMAIN
-    }
+    if not waffle.switch_is_active('firefox-accounts'):
+        site_settings = {
+            'persona_unverified_issuer': settings.BROWSERID_DOMAIN,
+        }
+    else:
+        site_settings = {}
 
     ua = request.META.get('HTTP_USER_AGENT', '').lower()
 
@@ -63,9 +67,6 @@ def commonplace(request, repo, **kwargs):
             'mccs' in request.GET or
             ('mcc' in request.GET and 'mnc' in request.GET)):
             include_persona = False
-
-    # Temporarily enabling include.js shim (bug 992334).
-    include_persona = True
 
     ctx = {
         'BUILD_ID': BUILD_ID,
@@ -91,7 +92,7 @@ def appcache_manifest(request):
     if not repo or repo not in settings.COMMONPLACE_REPOS_APPCACHED:
         return HttpResponseNotFound()
     template = appcache_manifest_template(repo)
-    return HttpResponse(template, mimetype='text/cache-manifest')
+    return HttpResponse(template, content_type='text/cache-manifest')
 
 
 @memoize('appcache-manifest-template')

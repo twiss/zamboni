@@ -19,7 +19,7 @@ dennis==0.4.2
 Django==1.6.5
 dj-database-url==0.2.2
 django-aesfield==0.1.2
-django-browserid==0.8
+django-browserid==0.10.1
 django-cache-nuggets==0.1.1
 django-celery==3.0.23
 django-cronjobs==0.2.3
@@ -38,7 +38,9 @@ djangorestframework==2.3.12
 django-statsd-mozilla==0.3.10
 django-storages==1.1.8
 django-waffle==0.9.2
+drf-compound-fields==0.2.1
 easy-thumbnails==1.4
+elasticsearch==1.1.1
 elasticutils==0.8.2
 email-reply-parser==0.2.0
 fastchardet==0.2.0
@@ -92,10 +94,11 @@ slumber==0.5.3
 SQLAlchemy==0.7.5
 statsd==2.0.3
 suds==0.4
+urllib3==1.8.2
 
 ## Not on pypi.
 -e git+https://github.com/mozilla/amo-validator.git@d83d94f6494fa842cd11fdbb0b0acf150b85af51#egg=amo-validator
--e git+https://github.com/mozilla/app-validator.git@f84dda5721c5fd23232f0969d215b197da900179#egg=app-validator
+-e git+https://github.com/mozilla/app-validator.git@e4fdcb90b79728bf5e78789f2496d81d6ed20500#egg=app-validator
 -e git+https://github.com/jbalogh/django-queryset-transform@a1ba6ae41bd86f5bb9ff66fb56614e0fafe6e022#egg=django-queryset-transform
 -e git+https://github.com/mozilla/happyforms.git@729612c2a824a7e8283d416d2084bf506c671e24#egg=happyforms
 
@@ -105,7 +108,7 @@ suds==0.4
 -e git+https://github.com/washort/test-utils.git@4917197a64b6d0f2068c9ad1bfea0427c3e412e1#egg=test-utils
 -e git+https://github.com/fwenzel/django-mozilla-product-details@f5a3c3c846fb75e12ad890b22ed5375d5b85ccb4#egg=django-mozilla-product-details
 -e git+https://github.com/mozilla/django-session-csrf@f00ad913c62e139d36078e8a7e07dab65a021386#egg=django-session-csrf
--e git+https://github.com/washort/django-cache-machine@4690198122a96a88267323566dc18a5e0437681f#egg=django-cache-machine
+-e git+https://github.com/washort/django-cache-machine@b7a8d44ba60c44c5bd0aaae410b54d4712881f83#egg=django-cache-machine
 ## Forked.
 -e git+https://github.com/andymckay/django-uuidfield.git@029dd1263794ec36c327617cd6c2346da81c8c33#egg=django-uuidfield
 -e git+https://github.com/washort/django-mysql-pool.git@76ed372bb9888d46833345ae6c40a39d41b5ba62#egg=django-mysql-pool

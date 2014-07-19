@@ -12,7 +12,7 @@ from django.utils.http import is_safe_url
 from django.views.decorators.csrf import csrf_exempt
 
 import commonware.log
-from django_browserid import get_audience, verify
+from django_browserid import BrowserIDBackend, get_audience
 from django_statsd.clients import statsd
 from requests_oauthlib import OAuth2Session
 from tower import ugettext as _
@@ -20,7 +20,8 @@ import waffle
 
 import amo
 from amo.decorators import json_view, login_required, post_required
-from amo.urlresolvers import get_url_prefix
+from amo.helpers import absolutify
+from amo.urlresolvers import get_url_prefix, reverse
 from amo.utils import escape_all, log_cef
 from lib.metrics import record_action
 
@@ -99,43 +100,22 @@ def _clean_next_url(request):
     return request
 
 
-def get_fxa_session(state=None):
+def get_fxa_session(**kwargs):
     return OAuth2Session(
         settings.FXA_CLIENT_ID,
         scope=u'profile',
-        state=state)
+        **kwargs)
 
 
 def fxa_oauth_api(name):
     return urlparse.urljoin(settings.FXA_OAUTH_URL, 'v1/' + name)
 
 
-@csrf_exempt
-def fxa_login(request):
-    if not waffle.switch_is_active('firefox-accounts'):
-        return http.HttpResponse(status=403)
-    if 'to' in request.GET:
-        request = _clean_next_url(request)
-        request.session['redirect_to'] = request.GET.get('to')
-    fxa = get_fxa_session()
-    auth_url, state = fxa.authorization_url(fxa_oauth_api('authorization'))
-    request.session['state'] = state
-    return http.HttpResponseRedirect(auth_url)
-
-
-@csrf_exempt
-@transaction.commit_on_success
-def fxa_authorize(request):
-    if not waffle.switch_is_active('firefox-accounts'):
-        return http.HttpResponse(status=403)
-    state = request.session.get('state')
-    if not state:
-        return http.HttpResponse(status=400, content='Invalid callback state.')
-    fxa = get_fxa_session(state)
+def _fxa_authorize(fxa, client_secret, request, auth_response):
     token = fxa.fetch_token(
         fxa_oauth_api('token'),
-        authorization_response=request.build_absolute_uri(),
-        client_secret=settings.FXA_CLIENT_SECRET)
+        authorization_response=auth_response,
+        client_secret=client_secret)
     res = fxa.post(fxa_oauth_api('verify'),
                    data=json.dumps({'token': token['access_token']}),
                    headers={'Content-Type': 'application/json'})
@@ -147,21 +127,22 @@ def fxa_authorize(request):
             profile = UserProfile.objects.get(email=email)
         except UserProfile.DoesNotExist:
             source = amo.LOGIN_SOURCE_FXA
-            profile = UserProfile.objects.create(username=username, email=email,
-                                                 source=source,
-                                                 display_name=email.partition('@')[0],
-                                                 is_verified=True)
+            profile = UserProfile.objects.create(
+                username=username,
+                email=email,
+                source=source,
+                display_name=email.partition('@')[0],
+                is_verified=True)
             log_cef('New Account', 5, request, username=username,
                     signature='AUTHNOTICE',
                     msg='User created a new account (from FxA)')
             record_action('new-user', request)
         auth.login(request, profile)
         profile.log_login_attempt(True)
-        return http.HttpResponseRedirect(request.session.get('redirect_to') or
-                                         settings.LOGIN_REDIRECT_URL)
-    else:
-        log.error('FxA token verification failed: ' + res.content)
-        return http.HttpResponse(status=401)
+        auth.signals.user_logged_in.send(
+            sender=profile.__class__, request=request,
+            user=profile)
+        return profile
 
 
 def browserid_authenticate(request, assertion, is_mobile=False,
@@ -188,16 +169,17 @@ def browserid_authenticate(request, assertion, is_mobile=False,
 
     log.debug('Verifying Persona at %s, audience: %s, '
               'extra_params: %s' % (url, browserid_audience, extra_params))
-    result = verify(assertion, browserid_audience,
-                    url=url, extra_params=extra_params)
+    v = BrowserIDBackend().get_verifier()
+    v.verification_service_url = url
+    result = v.verify(assertion, browserid_audience, url=url, **extra_params)
     if not result:
         return None, _('Persona authentication failure.')
 
-    if 'unverified-email' in result:
-        email = result['unverified-email']
+    if 'unverified-email' in result._response:
+        email = result._response['unverified-email']
         verified = False
     else:
-        email = result['email']
+        email = result.email
         verified = True
 
     try:

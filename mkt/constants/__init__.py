@@ -1,7 +1,10 @@
+from .apps import MANIFEST_CONTENT_TYPE
 from .bango import (BANGO_COUNTRIES, BANGO_CURRENCIES,
                     BANGO_OUTPAYMENT_CURRENCIES)
 from .carriers import CARRIER_CHOICES, CARRIER_SLUGS
-from .features import APP_FEATURES
+from .categories import (CATEGORY_CHOICES, CATEGORY_CHOICES_DICT,
+                         TARAKO_CATEGORY_CHOICES, TARAKO_CATEGORIES_MAPPING)
+from .features import APP_FEATURES, PRERELEASE_PERMISSIONS
 from .platforms import DEVICE_LOOKUP, FREE_PLATFORMS, PAID_PLATFORMS
 from .regions import REGIONS_CHOICES_ID
 from .submit import (APP_PREVIEW_MINIMUMS, APP_PREVIEW_SIZES,

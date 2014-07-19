@@ -191,7 +191,7 @@ class ReviewApp(ReviewBase):
 
     def process_public(self):
         """
-        Makes an app public or public waiting.
+        Makes an app public or approved.
         Changes status to Public/Public Waiting.
         Creates Approval note/email.
         """
@@ -201,10 +201,10 @@ class ReviewApp(ReviewBase):
 
         # Hold onto the status before we change it.
         status = self.addon.status
-        if self.addon.make_public == amo.PUBLIC_IMMEDIATELY:
+        if self.addon.publish_type == amo.PUBLISH_IMMEDIATE:
             self._process_public_immediately()
         else:
-            self._process_public_waiting()
+            self._process_approved()
 
         if self.in_escalate:
             EscalationQueue.objects.filter(addon=self.addon).delete()
@@ -217,24 +217,24 @@ class ReviewApp(ReviewBase):
         return ReviewerScore.award_points(self.request.amo_user, self.addon,
                                           status)
 
-    def _process_public_waiting(self):
-        """Make an app public waiting."""
+    def _process_approved(self):
+        """Make an app approved."""
         if self.addon.has_incomplete_status():
             # Failsafe.
             return
 
         self.addon.sign_if_packaged(self.version.pk)
-        self.set_files(amo.STATUS_PUBLIC_WAITING, self.version.files.all())
+        self.set_files(amo.STATUS_APPROVED, self.version.files.all())
         if self.addon.status != amo.STATUS_PUBLIC:
-            self.set_addon(status=amo.STATUS_PUBLIC_WAITING,
-                           highest_status=amo.STATUS_PUBLIC_WAITING)
+            self.set_addon(status=amo.STATUS_APPROVED,
+                           highest_status=amo.STATUS_APPROVED)
         self.set_reviewed()
 
         self.create_note(amo.LOG.APPROVE_VERSION_WAITING)
-        self.notify_email('pending_to_public_waiting',
+        self.notify_email('pending_to_approved',
                           u'App approved but waiting: %s')
 
-        log.info(u'Making %s public but pending' % self.addon)
+        log.info(u'Making %s approved' % self.addon)
 
     def _process_public_immediately(self):
         """Changes status to Public."""
@@ -266,8 +266,7 @@ class ReviewApp(ReviewBase):
         self.addon.update_supported_locales()
         self.addon.resend_version_changed_signal = True
 
-        if waffle.switch_is_active('iarc'):
-            self.addon.set_iarc_storefront_data()
+        self.addon.set_iarc_storefront_data()
 
         self.create_note(amo.LOG.APPROVE_VERSION)
         self.notify_email('pending_to_public', u'App approved: %s')
@@ -422,15 +421,16 @@ class ReviewHelper(object):
         public = {
             'method': self.handler.process_public,
             'minimal': False,
-            'label': _lazy(u'Push to public'),
-            'details': _lazy(u'This will approve the sandboxed app so it '
-                             u'appears on the public side.')}
+            'label': _lazy(u'Approve'),
+            'details': _lazy(u'This will approve the app and allow the '
+                             u'author(s) to publish it.')}
         reject = {
             'method': self.handler.process_reject,
             'label': _lazy(u'Reject'),
             'minimal': False,
-            'details': _lazy(u'This will reject the app and remove it from '
-                             u'the review queue.')}
+            'details': _lazy(u'This will reject the app, remove it from '
+                             u'the review queue and un-publish it if already '
+                             u'published.')}
         info = {
             'method': self.handler.request_information,
             'label': _lazy(u'Request more information'),
@@ -441,33 +441,36 @@ class ReviewHelper(object):
             'method': self.handler.process_escalate,
             'label': _lazy(u'Escalate'),
             'minimal': True,
-            'details': _lazy(u'Flag this app for an admin to review.')}
+            'details': _lazy(u'Flag this app for an admin to review. The '
+                             u'comments are sent to the admins, '
+                             u'not the author(s).')}
         comment = {
             'method': self.handler.process_comment,
             'label': _lazy(u'Comment'),
             'minimal': True,
-            'details': _lazy(u'Make a comment on this app.  The author won\'t '
-                             u'be able to see this.')}
+            'details': _lazy(u'Make a comment on this app.  The author(s) '
+                             u'won\'t be able to see these comments.')}
         clear_escalation = {
             'method': self.handler.process_clear_escalation,
             'label': _lazy(u'Clear Escalation'),
             'minimal': True,
             'details': _lazy(u'Clear this app from the escalation queue. The '
-                             u'author will get no email or see comments '
+                             u'author(s) will get no email or see comments '
                              u'here.')}
         clear_rereview = {
             'method': self.handler.process_clear_rereview,
             'label': _lazy(u'Clear Re-review'),
             'minimal': True,
             'details': _lazy(u'Clear this app from the re-review queue. The '
-                             u'author will get no email or see comments '
+                             u'author(s) will get no email or see comments '
                              u'here.')}
         disable = {
             'method': self.handler.process_disable,
             'label': _lazy(u'Disable app'),
             'minimal': True,
-            'details': _lazy(u'Disable the app, removing it from public '
-                             u'results. Sends comments to author.')}
+            'details': _lazy(u'Disable the app, the same as Reject but the '
+                             u'author(s) can\'t resubmit. To only be used in '
+                             u'extreme cases.')}
 
         actions = SortedDict()
 
