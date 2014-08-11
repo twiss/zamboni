@@ -1,24 +1,30 @@
 # -*- coding: utf-8 -*-
 import json
+import os
 
+from django.conf import settings
 from django.core.urlresolvers import reverse
 from django.utils.text import slugify
 
+import mock
+from elasticsearch_dsl.search import Search
 from nose.tools import eq_, ok_
 
 import amo.tests
-from amo.tests import app_factory
-
 import mkt.carriers
+import mkt.feed.constants as feed
 import mkt.regions
+from amo.tests import app_factory
 from mkt.api.tests.test_oauth import RestOAuth
-from mkt.constants.carriers import CARRIER_MAP
-from mkt.constants.regions import REGIONS_DICT
 from mkt.feed.models import (FeedApp, FeedBrand, FeedCollection, FeedItem,
                              FeedShelf)
 from mkt.feed.tests.test_models import FeedAppMixin, FeedTestMixin
-from mkt.site.fixtures import fixture
+from mkt.feed.views import FeedView
 from mkt.webapps.models import Preview, Webapp
+
+
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+FILES_DIR = os.path.join(TEST_DIR, 'files')
 
 
 class BaseTestFeedItemViewSet(RestOAuth, FeedTestMixin):
@@ -31,6 +37,27 @@ class BaseTestFeedItemViewSet(RestOAuth, FeedTestMixin):
         Grant the Feed:Curate permission to the authenticating user.
         """
         self.grant_permission(self.profile, 'Feed:Curate')
+
+
+class BaseTestFeedESView(amo.tests.ESTestCase):
+    def setUp(self):
+        Webapp.get_indexer().index_ids(
+            list(Webapp.objects.values_list('id', flat=True)))
+        super(BaseTestFeedESView, self).setUp()
+
+    def tearDown(self):
+        for model in (FeedApp, FeedBrand, FeedCollection, FeedShelf,
+                      FeedItem):
+            model.get_indexer().unindexer(_all=True)
+        super(BaseTestFeedESView, self).tearDown()
+
+    def _refresh(self):
+        self.refresh('mkt_feed_app')
+        self.refresh('mkt_feed_brand')
+        self.refresh('mkt_feed_collection')
+        self.refresh('mkt_feed_shelf')
+        self.refresh('mkt_feed_item')
+        self.refresh('webapp')
 
 
 class TestFeedItemViewSetList(FeedAppMixin, BaseTestFeedItemViewSet):
@@ -122,6 +149,7 @@ class TestFeedItemViewSetCreate(FeedAppMixin, BaseTestFeedItemViewSet):
     def test_create_with_permission(self):
         self.feed_permission()
         res, data = self.create(self.client, app=self.feedapps[0].pk,
+                                item_type=feed.FEED_TYPE_APP,
                                 carrier=mkt.carriers.TELEFONICA.id,
                                 region=mkt.regions.BR.id)
         eq_(res.status_code, 201)
@@ -198,7 +226,8 @@ class TestFeedItemViewSetUpdate(FeedAppMixin, BaseTestFeedItemViewSet):
 
     def test_update_with_permission(self):
         self.feed_permission()
-        res, data = self.update(self.client, region=mkt.regions.US.id)
+        res, data = self.update(self.client, item_type=feed.FEED_TYPE_APP,
+                                region=mkt.regions.US.id)
         eq_(res.status_code, 200)
         eq_(data['id'], self.item.pk)
         eq_(data['region'], mkt.regions.US.slug)
@@ -387,6 +416,36 @@ class TestFeedAppViewSetCreate(BaseTestFeedAppViewSet):
         res, data = self.create(self.client, **self.feedapp_data)
         eq_(res.status_code, 400)
         ok_('pullquote_rating' in data)
+
+    @mock.patch('mkt.feed.fields.requests.get')
+    def test_create_with_background_image_upload_url(self, download_mock):
+        res_mock = mock.Mock()
+        res_mock.status_code = 200
+        res_mock.content = open(
+            os.path.join(FILES_DIR, 'bacon.jpg'), 'r').read()
+        download_mock.return_value = res_mock
+
+        self.feed_permission()
+        self.feedapp_data.update(
+            {'background_image_upload_url': 'ngokevin.com'})  # SEO.
+        res, data = self.create(self.client, **self.feedapp_data)
+
+        assert data['background_image'].endswith(
+            FeedApp.objects.all()[0].image_hash)
+
+    @mock.patch('mkt.feed.fields.requests.get')
+    def test_background_image_404(self, download_mock):
+        res_mock = mock.Mock()
+        res_mock.status_code = 404
+        res_mock.content = ''
+        download_mock.return_value = res_mock
+
+        self.feed_permission()
+        self.feedapp_data.update(
+            {'background_image_upload_url': 'ngokevin.com'})  # SEO.
+        res, data = self.create(self.client, **self.feedapp_data)
+
+        eq_(res.status_code, 400)
 
     def test_create_no_data(self):
         self.feed_permission()
@@ -818,6 +877,36 @@ class TestFeedCollectionViewSet(BaseTestFeedCollection, RestOAuth):
         self.assertSetEqual(
             apps, [app['id'] for app in data['apps']])
 
+    @mock.patch('mkt.feed.fields.requests.get')
+    def test_create_with_background_image_upload_url(self, download_mock):
+        res_mock = mock.Mock()
+        res_mock.status_code = 200
+        res_mock.content = open(
+            os.path.join(FILES_DIR, 'bacon.jpg'), 'r').read()
+        download_mock.return_value = res_mock
+
+        self.feed_permission()
+        data = dict(self.obj_data)
+        data.update({'background_image_upload_url': 'ngokevin.com'})  # SEO.
+        res, data = self.create(self.client, **data)
+
+        assert data['background_image'].endswith(
+            FeedCollection.objects.all()[0].image_hash)
+
+    @mock.patch('mkt.feed.fields.requests.get')
+    def test_background_image_404(self, download_mock):
+        res_mock = mock.Mock()
+        res_mock.status_code = 404
+        res_mock.content = ''
+        download_mock.return_value = res_mock
+
+        self.feed_permission()
+        data = dict(self.obj_data)
+        data.update({'background_image_upload_url': 'ngokevin.com'})
+        res, data = self.create(self.client, **data)
+
+        eq_(res.status_code, 400)
+
 
 class TestFeedShelfViewSet(BaseTestFeedCollection, RestOAuth):
     obj_data = {
@@ -952,8 +1041,16 @@ class TestBuilderView(FeedAppMixin, BaseTestFeedItemViewSet):
         r = self._set_feed_items(self.data)
         eq_(r.status_code, 400)
 
+    @mock.patch('mkt.search.indexers.BaseIndexer.index_ids')
+    def test_index(self, index_mock):
+        self.feed_permission()
+        self._set_feed_items(self.data)
+        assert index_mock.called
+        self.assertSetEqual(index_mock.call_args_list[0][0][0],
+                            FeedItem.objects.values_list('id', flat=True))
 
-class TestFeedElementSearchView(BaseTestFeedItemViewSet, amo.tests.ESTestCase):
+
+class TestFeedElementSearchView(BaseTestFeedESView, BaseTestFeedItemViewSet):
     fixtures = BaseTestFeedItemViewSet.fixtures + FeedTestMixin.fixtures
 
     def setUp(self):
@@ -967,16 +1064,10 @@ class TestFeedElementSearchView(BaseTestFeedItemViewSet, amo.tests.ESTestCase):
         self.feed_permission()
         self.url = reverse('api-v2:feed.element-search')
 
-        self._refresh_feed_es()
-
-    def _refresh_feed_es(self):
-        self.refresh(FeedApp._meta.db_table)
-        self.refresh(FeedBrand._meta.db_table)
-        self.refresh(FeedCollection._meta.db_table)
-        self.refresh(FeedShelf._meta.db_table)
+        self._refresh()
 
     def _search(self, q):
-        res = self.client.get(self.url, data={'q': 'feed'})
+        res = self.client.get(self.url, data={'q': q or 'feed'})
         return res, json.loads(res.content)
 
     def test_query_slug(self):
@@ -987,6 +1078,33 @@ class TestFeedElementSearchView(BaseTestFeedItemViewSet, amo.tests.ESTestCase):
         eq_(data['brands'][0]['id'], self.brand.id)
         eq_(data['collections'][0]['id'], self.collection.id)
         eq_(data['shelves'][0]['id'], self.shelf.id)
+
+    def test_query_name(self):
+        res, data = self._search('Super Collection')
+        eq_(res.status_code, 200)
+
+        eq_(data['collections'][0]['id'], self.collection.id)
+        assert not data['apps']
+        assert not data['brands']
+        assert not data['shelves']
+
+    def test_query_type(self):
+        res, data = self._search('mystery')
+        eq_(res.status_code, 200)
+
+        eq_(data['brands'][0]['id'], self.brand.id)
+        assert not data['apps']
+        assert not data['collections']
+        assert not data['shelves']
+
+    def test_query_carrier(self):
+        res, data = self._search('restofworld')
+        eq_(res.status_code, 200)
+
+        eq_(data['shelves'][0]['id'], self.shelf.id)
+        assert not data['apps']
+        assert not data['brands']
+        assert not data['collections']
 
 
 class TestFeedShelfPublishView(BaseTestFeedItemViewSet, amo.tests.TestCase):
@@ -1020,87 +1138,314 @@ class TestFeedShelfPublishView(BaseTestFeedItemViewSet, amo.tests.TestCase):
         eq_(FeedItem.objects.count(), 1)
         assert FeedItem.objects.filter(shelf_id=new_shelf.id).exists()
 
+    def test_unpublish(self):
+        # Publish.
+        self.client.put(self.url)
+        eq_(FeedItem.objects.count(), 1)
+        assert FeedItem.objects.filter(shelf_id=self.shelf.id).exists()
+
+        # Unpublish.
+        res = self.client.delete(self.url)
+        eq_(FeedItem.objects.count(), 0)
+        eq_(res.status_code, 204)
+
     def test_404(self):
         self.url = reverse('api-v2:feed-shelf-publish', args=[8008135])
         res = self.client.put(self.url)
         eq_(res.status_code, 404)
 
+        res = self.client.delete(self.url)
+        eq_(res.status_code, 404)
 
-class TestFeedView(FeedTestMixin, RestOAuth):
-    fixtures = fixture('webapp_337141') + RestOAuth.fixtures
+
+class TestFeedView(BaseTestFeedESView, BaseTestFeedItemViewSet):
+    fixtures = BaseTestFeedItemViewSet.fixtures + FeedTestMixin.fixtures
 
     def setUp(self):
         super(TestFeedView, self).setUp()
         self.url = reverse('api-v2:feed.get')
-        self.carrier = 'tmn'
-        self.carrier_id = CARRIER_MAP[self.carrier].id
-        self.region = 'us'
-        self.region_id = REGIONS_DICT[self.region].id
+        self.carrier = 'telefonica'
+        self.region = 'restofworld'
 
-    def create_feed(self, n):
-        self.feed_items = []
-        for i in xrange(n):
-            app = app_factory()
-            feedapp = self.feed_app_factory(app_id=app.id)
-            feeditem = FeedItem.objects.create(carrier=self.carrier_id,
-                app=feedapp, region=self.region_id, item_type='app')
-            self.feed_items.append(feeditem)
+    def _get(self, client=None, **kwargs):
+        client = client or self.anon
+        kwargs['carrier'] = kwargs.get('carrier', self.carrier)
+        kwargs['region'] = kwargs.get('region', self.region)
 
-    def create_shelf(self):
-        feedshelf = self.feed_shelf_factory(carrier=self.carrier_id,
-                                            region=self.region_id)
-        self.shelf = FeedItem.objects.create(
-            carrier=self.carrier_id, region=self.region_id, item_type='shelf',
-            shelf=feedshelf)
-
-    def get(self, client, **kwargs):
-        res = client.get(self.url, kwargs)
+        if kwargs.get('no_assert_queries'):
+            # For auth tests, where a bunch of user-related queries are dne.
+            res = client.get(self.url, kwargs)
+        else:
+            with self.assertNumQueries(0):
+                res = client.get(self.url, kwargs)
         data = json.loads(res.content)
         return res, data
 
-    def test_get_anon(self):
-        res, data = self.get(self.anon, carrier=self.carrier,
-                             region=self.region)
+    @mock.patch('mkt.feed.views.statsd.timer')
+    def test_200(self, statsd_mock):
+        feed_items = self.feed_factory()
+        self._refresh()
+        res, data = self._get()
+        eq_(res.status_code, 200)
+        eq_(len(data['objects']), len(feed_items))
+
+        assert statsd_mock.called
+
+    def test_200_authed(self):
+        feed_items = self.feed_factory()
+        self._refresh()
+        res, data = self._get(self.client, no_assert_queries=True)
+        eq_(res.status_code, 200)
+        eq_(len(data['objects']), len(feed_items))
+
+    def test_404(self):
+        self._refresh()
+        res, data = self._get(self.client, no_assert_queries=True)
+        eq_(len(data['objects']), 0)
+        eq_(res.status_code, 404)
+
+    def test_region_only(self):
+        feed_items = self.feed_factory()
+        self._refresh()
+        res, data = self._get(carrier=None)
+        eq_(len(data['objects']), len(feed_items))
+
+    def test_carrier_only(self):
+        feed_items = self.feed_factory()
+        self._refresh()
+        res, data = self._get(region=None)
+        eq_(len(data['objects']), len(feed_items))
+
+    def test_feed_app_only(self):
+        self.feed_item_factory()
+        self._refresh()
+        res, data = self._get()
+        eq_(len(data['objects']), 1)
+
+    def test_shelf_top(self):
+        self.feed_factory()
+        self._refresh()
+        res, data = self._get()
+        eq_(data['objects'][0]['item_type'],
+            feed.FEED_TYPE_SHELF)
+
+    def test_region_filter(self):
+        """Test that changing region gives different feed."""
+        self.feed_factory()
+        self.feed_item_factory(region=2)
+        self._refresh()
+        res, data = self._get(region='us')
+        eq_(len(data['objects']), 1)
+
+    def test_carrier_filter(self):
+        """Test that changing carrier affects the opshelf."""
+        self.feed_factory()
+        self._refresh()
+        res, data = self._get(carrier='tmn')
+        eq_(len(data['objects']), 3)
+        ok_(data['objects'][0]['item_type'] != feed.FEED_TYPE_SHELF)
+
+    def test_deserialized(self):
+        """Test that feed elements and apps are deserialized."""
+        self.feed_factory()
+        self._refresh()
+        res, data = self._get()
+        for feed_item in data['objects']:
+            item_type = feed_item['item_type']
+            feed_elm = feed_item[item_type]
+            if feed_elm.get('app'):
+                ok_(feed_elm['app']['id'])
+            else:
+                if feed_item['item_type'] == feed.FEED_TYPE_SHELF:
+                    # Shelves don't display app data on feed.
+                    continue
+                ok_(len(feed_elm['apps']))
+                for app in feed_elm['apps']:
+                    ok_(app['id'])
+
+    def test_restofworld_fallback(self):
+        feed_items = self.feed_factory()
+        self._refresh()
+        res, data = self._get(region='us')
+        eq_(len(data['objects']), len(feed_items))
+
+    def test_order(self):
+        """Test feed elements are ordered by their order attribute."""
+        feed_items = [self.feed_item_factory(order=i + 1) for i in xrange(4)]
+        self._refresh()
+        res, data = self._get()
+        for i, feed_item in enumerate(feed_items):
+            eq_(data['objects'][i]['id'], feed_item.id)
+
+
+class TestFeedViewQueries(BaseTestFeedItemViewSet, amo.tests.TestCase):
+    fixtures = BaseTestFeedItemViewSet.fixtures + FeedTestMixin.fixtures
+
+    def setUp(self):
+        self.fv = FeedView()
+        self.sq = Search()
+
+    def test_region_default(self):
+        """Region default to RoW."""
+        sq = self.fv.get_es_feed_query(self.sq).to_dict()
+        eq_(sq['query']['function_score']['filter']['term']['region'], 1)
+
+    def test_region(self):
+        """With region only."""
+        sq = self.fv.get_es_feed_query(self.sq, region=2).to_dict()
+        eq_(sq['query']['function_score']['filter']['term']['region'], 2)
+
+    def test_carrier_with_region(self):
+        sq = self.fv.get_es_feed_query(self.sq, region=2, carrier=1).to_dict()
+        # Test filter.
+        ok_({'term': {'region': 2}}
+            in sq['query']['function_score']['filter']['bool']['must'])
+        ok_({'bool': {'must_not': [{'term': {'carrier': 1}}],
+                      'must': [{'term': {'item_type': 'shelf'}}]}}
+            in sq['query']['function_score']['filter']['bool']['must_not'])
+        # Test functions.
+        ok_({'filter': {'term': {'item_type': 'shelf'}},
+             'boost_factor': 10000.0}
+            in sq['query']['function_score']['functions'])
+        ok_({'filter': {'bool': {
+            'must_not': [{'term': {'item_type': 'shelf'}}],
+            'must': [{'term': {'region': 2}}]}},
+            'field_value_factor': {'field': 'order',
+                                   'modifier': 'reciprocal'}}
+            in sq['query']['function_score']['functions'])
+
+    def test_carrier_default_region(self):
+        sq = self.fv.get_es_feed_query(self.sq, carrier=1).to_dict()
+        # Test filter.
+        ok_({'term': {'region': 1}}
+            in sq['query']['function_score']['filter']['bool']['must'])
+
+    def test_order(self):
+        """Order script scoring."""
+        sq = self.fv.get_es_feed_query(self.sq).to_dict()
+        ok_({'term': {'region': 1}}
+            in sq['query']['function_score']['functions'][0]
+            ['filter']['bool']['must'])
+        ok_({'term': {'item_type': 'shelf'}}
+             in sq['query']['function_score']['functions'][0]
+             ['filter']['bool']['must_not'])
+        eq_(sq['query']['function_score']['functions'][0]
+            ['field_value_factor'], {'field': 'order',
+                                     'modifier': 'reciprocal'})
+
+    def test_element_query(self):
+        feed_item = self.feed_item_factory()
+        item = feed_item.get_indexer().extract_document(None, obj=feed_item)
+        sq = self.fv.get_es_feed_element_query(self.sq, [item]).to_dict()
+        ok_({'bool': {'must': [{'term': {'id': feed_item.app_id}},
+                               {'term': {'item_type': 'app'}}]}}
+            in sq['query']['filtered']['filter']['bool']['should'])
+
+
+class TestFeedElementGetView(BaseTestFeedESView, BaseTestFeedItemViewSet):
+    fixtures = BaseTestFeedItemViewSet.fixtures + FeedTestMixin.fixtures
+
+    def _get(self, url, **kwargs):
+        self._refresh()
+        with self.assertNumQueries(0):
+            res = self.anon.get(url, kwargs)
+        data = json.loads(res.content)
         eq_(res.status_code, 200)
         return res, data
 
-    def test_get_authed(self):
-        res, data = self.get(self.client, carrier=self.carrier,
-                             region=self.region)
+    def _assert(self, obj, result):
+        eq_(obj.id, result['id'])
+        if hasattr(obj, 'app_id'):
+            eq_(obj.app_id, result['app']['id'])
+        else:
+            self.assertSetEqual(obj.apps().values_list('id', flat=True),
+                                [app['id'] for app in result['apps']])
+
+    def test_app(self):
+        app = self.feed_app_factory()
+        url = reverse('api-v2:feed.feed_element_get',
+                      args=['apps', app.slug])
+        res, data = self._get(url)
+        self._assert(app, data)
+
+    def test_brand(self):
+        brand = self.feed_brand_factory()
+        url = reverse('api-v2:feed.feed_element_get',
+                      args=['brands', brand.slug])
+        res, data = self._get(url)
+        self._assert(brand, data)
+
+    def test_collection(self):
+        collection = self.feed_collection_factory()
+        url = reverse('api-v2:feed.feed_element_get',
+                      args=['collections', collection.slug])
+        res, data = self._get(url)
+        self._assert(collection, data)
+
+    def test_shelf(self):
+        shelf = self.feed_shelf_factory()
+        url = reverse('api-v2:feed.feed_element_get',
+                      args=['shelves', shelf.slug])
+        res, data = self._get(url)
+        self._assert(shelf, data)
+
+    def test_404(self):
+        url = reverse('api-v2:feed.feed_element_get',
+                      args=['shelves', 'tehshrike'])
+        res = self.anon.get(url)
+        eq_(res.status_code, 404)
+
+
+class TestFeedElementListView(BaseTestFeedESView, BaseTestFeedItemViewSet):
+    fixtures = BaseTestFeedItemViewSet.fixtures + FeedTestMixin.fixtures
+
+    def setUp(self):
+        super(TestFeedElementListView, self).setUp()
+        self.feed_permission()
+
+    def _get(self, url, data=None, **kwargs):
+        self._refresh()
+        res = self.client.get(url, data=data)
+        data = json.loads(res.content)
+        return res, data
+
+    def test_404(self):
+        res, data = self._get(reverse('api-v2:feed.feed_element_list',
+                                      args=['apps']))
+        eq_(res.status_code, 404)
+        eq_(data['objects'], [])
+
+    def test_apps(self):
+        n = 5
+        apps = [self.feed_app_factory() for i in range(n)]
+        [apps[i].update(created=self.days_ago(i)) for i in reversed(range(n))]
+
+        res, data = self._get(reverse('api-v2:feed.feed_element_list',
+                                      args=['apps']))
         eq_(res.status_code, 200)
-        return res, data
+        eq_(data['meta']['total_count'], 5)
+        [eq_(data['objects'][i]['id'], apps[i].id) for i in range(n)]
 
-    def test_get_shelf(self):
-        self.create_shelf()
-        res, data = self.test_get_anon()
-        eq_(data['shelf']['id'], self.shelf.id)
-        eq_(data['feed'], [])
+    def test_paginate(self):
+        n = 6
+        brands = [self.feed_brand_factory() for i in range(n)]
+        [brands[i].update(created=self.days_ago(i)) for i in
+         reversed(range(n))]
 
-    def test_get_feed(self):
-        feed_size = 3
-        self.create_feed(feed_size)
-        res, data = self.test_get_anon()
-        eq_(data['shelf'], None)
-        eq_(len(data['feed']), feed_size)
+        # Offset only.
+        res, data = self._get(reverse('api-v2:feed.feed_element_list',
+                                      args=['brands']),
+                              data={'limit': 5, 'offset': 5})
+        eq_(data['meta']['total_count'], 6)
+        eq_(data['meta']['limit'], 5)
+        eq_(len(data['objects']), 1)
+        eq_(data['objects'][0]['id'], brands[n - 1].id)
 
-    def test_get_both(self):
-        feed_size = 3
-        self.create_shelf()
-        self.create_feed(feed_size)
-        res, data = self.test_get_anon()
-        eq_(data['shelf']['id'], self.shelf.id)
-        eq_(len(data['feed']), feed_size)
-        return res, data
-
-    def test_shelf_mismatch(self):
-        self.test_get_both()
-        self.shelf.update(region=0)
-        res, data = self.test_get_anon()
-        eq_(data['shelf'], None)
-
-    def test_feed_mismatch(self):
-        self.test_get_both()
-        for item in self.feed_items:
-            item.update(region=0)
-        res, data = self.test_get_anon()
-        eq_(data['feed'], [])
+        # Offset and limit.
+        res, data = self._get(reverse('api-v2:feed.feed_element_list',
+                                      args=['brands']),
+                              data={'limit': 1, 'offset': 1})
+        eq_(data['meta']['total_count'], 6)
+        eq_(data['meta']['limit'], 1)
+        eq_(len(data['objects']), 1)
+        eq_(data['objects'][0]['id'], brands[1].id)

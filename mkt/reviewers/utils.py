@@ -23,6 +23,7 @@ from mkt.files.models import File
 from mkt.reviewers.models import EscalationQueue, RereviewQueue, ReviewerScore
 from mkt.site.helpers import product_as_dict
 from mkt.webapps.models import Webapp
+from mkt.webapps.tasks import set_storefront_data
 
 
 log = commonware.log.getLogger('z.mailer')
@@ -106,16 +107,10 @@ class ReviewBase(object):
             details['files'] = [f.id for f in self.files]
 
         # Commbadge (the future).
-        perm_overrides = {
-            comm.ESCALATION: {'developer': False},
-            comm.REVIEWER_COMMENT: {'developer': False},
-        }
         note_type = comm.ACTION_MAP(action.id)
         self.comm_thread, self.comm_note = create_comm_note(
-            self.addon, self.version, self.request.amo_user,
+            self.addon, self.version, self.request.user,
             self.data['comments'], note_type=note_type,
-            # Ignore switch so we don't have to re-migrate new notes.
-            perms=perm_overrides.get(note_type), no_switch=True,
             attachments=self.attachment_formset)
 
         # ActivityLog (ye olde).
@@ -214,7 +209,7 @@ class ReviewApp(ReviewBase):
             self.addon.update(priority_review=False)
 
         # Assign reviewer incentive scores.
-        return ReviewerScore.award_points(self.request.amo_user, self.addon,
+        return ReviewerScore.award_points(self.request.user, self.addon,
                                           status)
 
     def _process_approved(self):
@@ -266,7 +261,7 @@ class ReviewApp(ReviewBase):
         self.addon.update_supported_locales()
         self.addon.resend_version_changed_signal = True
 
-        self.addon.set_iarc_storefront_data()
+        set_storefront_data.delay(self.addon.pk)
 
         self.create_note(amo.LOG.APPROVE_VERSION)
         self.notify_email('pending_to_public', u'App approved: %s')
@@ -304,7 +299,7 @@ class ReviewApp(ReviewBase):
         log.info(u'Making %s disabled' % self.addon)
 
         # Assign reviewer incentive scores.
-        return ReviewerScore.award_points(self.request.amo_user, self.addon,
+        return ReviewerScore.award_points(self.request.user, self.addon,
                                           status, in_rereview=self.in_rereview)
 
     def process_escalate(self):
@@ -356,7 +351,7 @@ class ReviewApp(ReviewBase):
         self.create_note(amo.LOG.REREVIEW_CLEARED)
         log.info(u'Re-review cleared for app: %s' % self.addon)
         # Assign reviewer incentive scores.
-        return ReviewerScore.award_points(self.request.amo_user, self.addon,
+        return ReviewerScore.award_points(self.request.user, self.addon,
                                           self.addon.status, in_rereview=True)
 
     def process_disable(self):
@@ -378,7 +373,7 @@ class ReviewApp(ReviewBase):
         if self.in_rereview:
             RereviewQueue.objects.filter(addon=self.addon).delete()
 
-        self.addon.set_iarc_storefront_data(disable=True)
+        set_storefront_data.delay(self.addon.pk, disable=True)
 
         self.notify_email('disabled', u'App disabled by reviewer: %s')
         self.create_note(amo.LOG.APP_DISABLED)
@@ -597,7 +592,7 @@ class AppsReviewing(object):
 
     def __init__(self, request):
         self.request = request
-        self.user_id = request.amo_user.id
+        self.user_id = request.user.id
         self.key = '%s:myapps:%s' % (settings.CACHE_PREFIX, self.user_id)
 
     def get_apps(self):

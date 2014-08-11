@@ -13,6 +13,7 @@ from django.utils.http import urlencode
 from mock import patch, Mock
 from nose.tools import eq_, ok_
 
+import amo
 from amo.tests import TestCase, app_factory
 from amo.utils import urlparams
 
@@ -49,7 +50,7 @@ class TestMine(TestCase):
 
     def setUp(self):
         self.request = Mock()
-        self.request.amo_user = UserProfile.objects.get(id=2519)
+        self.request.user = UserProfile.objects.get(id=2519)
 
     @patch.object(FakeResourceBase, 'get_object', create=True)
     def test_get_object(self, mocked_get_object):
@@ -476,6 +477,7 @@ class TestFxaLoginHandler(TestCase):
         self.grant_permission(profile, 'Apps:Review')
 
         data = self._test_login()
+        eq_(profile.reload().source, amo.LOGIN_SOURCE_FXA)
         eq_(data['permissions'],
             {'admin': False,
              'developer': False,
@@ -653,9 +655,12 @@ class TestNewsletter(RestOAuth):
 
     @patch('basket.subscribe')
     def test_signup_anonymous(self, subscribe):
-        res = self.anon.post(self.url)
-        eq_(res.status_code, 403)
-        ok_(not subscribe.called)
+        res = self.anon.post(self.url,
+                               data=json.dumps({'email': 'bob@example.com'}))
+        eq_(res.status_code, 204)
+        subscribe.assert_called_with(
+            'bob@example.com', 'marketplace', lang='en-US',
+            country='restofworld', trigger_welcome='Y', optin='Y', format='H')
 
     @patch('basket.subscribe')
     def test_signup(self, subscribe):

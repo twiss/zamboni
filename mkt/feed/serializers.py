@@ -19,7 +19,8 @@ from mkt.submit.serializers import FeedPreviewESSerializer
 from mkt.webapps.serializers import AppSerializer
 
 from . import constants
-from .fields import AppESField, FeedCollectionMembershipField
+from .fields import (AppESField, AppESHomeField, AppESHomePromoCollectionField,
+                     FeedCollectionMembershipField, ImageURLField)
 from .models import (FeedApp, FeedBrand, FeedCollection,
                      FeedCollectionMembership, FeedItem, FeedShelf)
 
@@ -132,6 +133,11 @@ class FeedAppESSerializer(FeedAppSerializer, BaseESSerializer):
         return feed_app
 
 
+class FeedAppESHomeSerializer(FeedAppESSerializer):
+    """Stripped down FeedAppESSerializer targeted for the homepage."""
+    app = AppESHomeField(source='_app_id')
+
+
 class FeedBrandSerializer(BaseFeedCollectionSerializer):
     """
     A serializer for the FeedBrand class, a type of collection that allows
@@ -161,13 +167,14 @@ class FeedBrandESSerializer(FeedBrandSerializer,
         return brand
 
 
-class FeedBrandSearchSerializer(FeedBrandSerializer):
+class FeedBrandESHomeSerializer(FeedBrandESSerializer):
     """
-    A simpler serializer for the FeedBrand class that does not include apps.
+    Stripped down FeedBrandESSerializer targeted for the homepage.
+    Different from the other Feed*ESHomeSerializers because it uses its own
+    app field.
     """
-    class Meta(FeedBrandSerializer.Meta):
-        fields = ('app_count', 'id', 'layout', 'preview_icon', 'slug', 'type',
-                  'url')
+    apps = AppESHomeField(source='_app_ids', many=True,
+                          limit=feed.HOME_NUM_APPS_BRAND)
 
 
 class FeedCollectionSerializer(BaseFeedCollectionSerializer):
@@ -234,11 +241,33 @@ class FeedCollectionESSerializer(FeedCollectionSerializer,
         collection._app_ids = data.get('apps')
 
         # Attach groups.
-        if data.get('group_apps'):
-            for app_id, app in self.context['app_map'].items():
-                app.update(data['group_names'][data['group_apps'][app_id]])
+        self.context['group_apps'] = data.get('group_apps')
+        self.context['group_names'] = data.get('group_names')
 
         return collection
+
+
+class FeedCollectionESHomeSerializer(FeedCollectionESSerializer):
+    """Stripped down FeedCollectionESSerializer targeted for the homepage."""
+    apps = serializers.SerializerMethodField('get_apps')
+
+    def get_apps(self, obj):
+        if obj.type == feed.COLLECTION_PROMO:
+            if obj.image_hash:
+                # Don't need any apps if background image.
+                return []
+            else:
+                # Need app icons if not background image.
+                app_field = AppESHomePromoCollectionField(
+                    many=True, limit=feed.HOME_NUM_APPS_PROMO_COLL)
+
+        elif obj.type == feed.COLLECTION_LISTING:
+            # Needs minimal app serialization like FeedBrand.
+            app_field = AppESField(many=True,
+                                   limit=feed.HOME_NUM_APPS_PROMO_COLL)
+
+        app_field.context = self.context
+        return app_field.to_native(obj._app_ids)
 
 
 class FeedShelfSerializer(BaseFeedCollectionSerializer):
@@ -250,12 +279,15 @@ class FeedShelfSerializer(BaseFeedCollectionSerializer):
         source='*', view_name='api-v2:feed-shelf-image-detail', format='png')
     carrier = SlugChoiceField(choices_dict=mkt.carriers.CARRIER_MAP)
     description = TranslationSerializerField(required=False)
+    is_published = serializers.BooleanField(source='is_published',
+                                            required=False)
     name = TranslationSerializerField()
     region = SlugChoiceField(choices_dict=mkt.regions.REGION_LOOKUP)
 
     class Meta:
-        fields = ('apps', 'background_color', 'background_image', 'carrier',
-                  'description', 'id', 'name', 'region', 'slug', 'url')
+        fields = ['apps', 'background_color', 'background_image', 'carrier',
+                  'description', 'id', 'is_published', 'name', 'region',
+                  'slug', 'url']
         model = FeedShelf
         url_basename = 'feedshelves'
 
@@ -268,10 +300,13 @@ class FeedShelfESSerializer(FeedShelfSerializer,
     description = ESTranslationSerializerField(required=False)
     name = ESTranslationSerializerField(required=False)
 
+    class Meta(FeedShelfSerializer.Meta):
+        fields = filter(lambda field: field != 'is_published',
+                        FeedShelfSerializer.Meta.fields)
+
     def fake_object(self, data):
         shelf = self._attach_fields(FeedShelf(), data, (
-            'id', 'background_color', 'carrier', 'image_hash', 'region',
-            'slug'
+            'id', 'background_color', 'carrier', 'image_hash', 'region', 'slug'
         ))
         shelf = self._attach_translations(shelf, data, (
             'description', 'name'
@@ -279,6 +314,12 @@ class FeedShelfESSerializer(FeedShelfSerializer,
 
         shelf._app_ids = data.get('apps')
         return shelf
+
+
+class FeedShelfESHomeSerializer(FeedShelfESSerializer):
+    """Stripped down FeedShelfESSerializer targeted for the homepage."""
+    apps = AppESHomePromoCollectionField(source='_app_ids', many=True,
+                                         limit=feed.HOME_NUM_APPS_SHELF)
 
 
 class FeedItemSerializer(URLSerializerMixin, serializers.ModelSerializer):
@@ -369,11 +410,12 @@ class FeedItemESSerializer(FeedItemSerializer, BaseESSerializer):
                                         element objects.
     self.context['request'] -- Django request, mainly for translations.
     """
-    app = FeedAppESSerializer(required=False, source='_app')
-    brand = FeedBrandESSerializer(required=False, source='_brand')
-    collection = FeedCollectionESSerializer(required=False,
-                                            source='_collection')
-    shelf = FeedShelfESSerializer(required=False, source='_shelf')
+    app = FeedAppESHomeSerializer(required=False, source='_app')
+    brand = FeedBrandESHomeSerializer(required=False, source='_brand')
+    collection = FeedCollectionESHomeSerializer(required=False,
+                                                source='_collection')
+    shelf = FeedShelfESHomeSerializer(required=False, source='_shelf')
+    item_type = serializers.CharField(source='item_type')
 
     def fake_object(self, data):
         feed_item = self._attach_fields(FeedItem(), data, (

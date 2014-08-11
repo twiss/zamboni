@@ -1,3 +1,4 @@
+import json
 import os
 import random
 import time
@@ -10,6 +11,7 @@ from urlparse import SplitResult, urlsplit, urlunsplit
 
 from django import forms
 from django.conf import settings
+from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
 from django.core.files.storage import default_storage as storage
 from django.db.models.signals import post_save
@@ -20,7 +22,6 @@ from django.utils import translation
 
 import caching
 import elasticsearch
-import elasticutils.contrib.django as elasticutils
 import mock
 import test_utils
 import tower
@@ -37,15 +38,12 @@ from waffle.models import Flag, Sample, Switch
 import amo
 import mkt
 from amo.urlresolvers import get_url_prefix, Prefixer, reverse, set_url_prefix
-from constants.applications import DEVICE_TYPES
 from lib.es.management.commands import reindex_mkt
 from lib.post_request_task import task as post_request_task
 from mkt.access.acl import check_ownership
 from mkt.access.models import Group, GroupUser
 from mkt.constants import regions
-from mkt.feed.indexers import (FeedAppIndexer, FeedBrandIndexer,
-                               FeedCollectionIndexer, FeedItemIndexer,
-                               FeedShelfIndexer)
+from mkt.constants.applications import DEVICE_TYPES
 from mkt.files.helpers import copyfileobj
 from mkt.files.models import File, Platform
 from mkt.prices.models import AddonPremium, Price, PriceCurrency
@@ -54,7 +52,6 @@ from mkt.site.fixtures import fixture
 from mkt.translations.models import Translation
 from mkt.users.models import UserProfile
 from mkt.versions.models import Version
-from mkt.webapps.indexers import WebappIndexer
 from mkt.webapps.models import update_search_index as app_update_search_index
 from mkt.webapps.models import Addon, Webapp
 from mkt.webapps.tasks import unindex_webapps
@@ -174,8 +171,54 @@ class TestClient(Client):
             raise AttributeError
 
 
-ES_patchers = [mock.patch('elasticutils.contrib.django', spec=True),
-               mock.patch('elasticsearch.Elasticsearch'),
+class _JSONifiedResponse(object):
+
+    def __init__(self, response):
+        self._orig_response = response
+
+    def __getattr__(self, n):
+        return getattr(self._orig_response, n)
+
+    def __getitem__(self, n):
+        return self._orig_response[n]
+
+    def __iter__(self):
+        return iter(self._orig_response)
+
+    @property
+    def json(self):
+        """Will return parsed JSON on response if there is any."""
+        if self.content and 'application/json' in self['Content-Type']:
+            if not hasattr(self, '_content_json'):
+                self._content_json = json.loads(self.content)
+            return self._content_json
+
+
+class JSONClient(TestClient):
+
+    def _with_json(self, response):
+        if hasattr(response, 'json'):
+            return response
+        else:
+            return _JSONifiedResponse(response)
+
+    def get(self, *args, **kw):
+        return self._with_json(super(JSONClient, self).get(*args, **kw))
+
+    def delete(self, *args, **kw):
+        return self._with_json(super(JSONClient, self).delete(*args, **kw))
+
+    def post(self, *args, **kw):
+        return self._with_json(super(JSONClient, self).post(*args, **kw))
+
+    def put(self, *args, **kw):
+        return self._with_json(super(JSONClient, self).put(*args, **kw))
+
+    def options(self, *args, **kw):
+        return self._with_json(super(JSONClient, self).options(*args, **kw))
+
+
+ES_patchers = [mock.patch('elasticsearch.Elasticsearch'),
                mock.patch('mkt.webapps.tasks.WebappIndexer', spec=True),
                mock.patch('mkt.webapps.tasks.Reindexing', spec=True,
                           side_effect=lambda i: [i])]
@@ -189,9 +232,6 @@ def start_es_mock():
 def stop_es_mock():
     for patch in ES_patchers:
         patch.stop()
-
-    if hasattr(elasticutils, '_local') and hasattr(elasticutils._local, 'es'):
-        delattr(elasticutils._local, 'es')
 
     # Reset cached Elasticsearch objects.
     BaseIndexer._es = {}
@@ -744,9 +784,10 @@ def req_factory_factory(url, user=None, post=False, data=None, **kwargs):
     else:
         req = req.get(url, data or {})
     if user:
-        req.amo_user = UserProfile.objects.get(id=user.id)
-        req.user = user
+        req.user = UserProfile.objects.get(id=user.id)
         req.groups = user.groups.all()
+    else:
+        req.user = AnonymousUser()
     req.check_ownership = partial(check_ownership, req)
     req.REGION = kwargs.pop('region', mkt.regions.REGIONS_CHOICES[0][1])
     req.API_VERSION = 2

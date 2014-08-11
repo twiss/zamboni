@@ -8,7 +8,7 @@ cd $WORKSPACE
 VENV=$WORKSPACE/venv
 VENDOR=$WORKSPACE/vendor
 LOCALE=$WORKSPACE/locale
-ES_HOST='jenkins-es20'
+ES_HOST='elasticsearch-1.2'
 SETTINGS=mkt
 
 echo "Starting build on executor $EXECUTOR_NUMBER..." `date`
@@ -68,10 +68,6 @@ ES_URLS = ['http://%s' % h for h in ES_HOSTS]
 SETTINGS
 
 export DJANGO_SETTINGS_MODULE=settings_local
-
-# Update product details to pull in any changes (namely, 'dbg' locale)
-echo "Updating product details..."
-python manage.py update_product_details
 
 echo "Starting tests..." `date`
 export FORCE_DB='yes sir'

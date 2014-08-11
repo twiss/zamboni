@@ -14,14 +14,14 @@ from jinja2.filters import do_dictsort
 from tower import ugettext_lazy as _
 
 import amo
-from amo.models import ManagerBase, ModelBase
 from amo.decorators import write
+from amo.models import ManagerBase, ModelBase
 from amo.utils import get_locale_from_lang
-from constants.payments import (CARRIER_CHOICES, PAYMENT_METHOD_ALL,
-                                PAYMENT_METHOD_CHOICES, PROVIDER_BANGO,
-                                PROVIDER_CHOICES, PROVIDER_LOOKUP)
 from lib.constants import ALL_CURRENCIES
 from mkt.constants import apps
+from mkt.constants.payments import (CARRIER_CHOICES, PAYMENT_METHOD_ALL,
+                                PAYMENT_METHOD_CHOICES, PROVIDER_BANGO,
+                                PROVIDER_CHOICES, PROVIDER_LOOKUP)
 from mkt.constants.regions import RESTOFWORLD, REGIONS_CHOICES_ID_DICT as RID
 from mkt.purchase.models import Contribution
 from mkt.regions.utils import remove_accents
@@ -325,12 +325,6 @@ def create_addon_purchase(sender, instance, **kw):
         instance.type not in [amo.CONTRIB_PURCHASE, amo.CONTRIB_REFUND,
                               amo.CONTRIB_CHARGEBACK]):
         # Whitelist the types we care about. Forget about the rest.
-        return
-
-    if not instance.user:
-        # This could be an anonymous serverless in-app purchase.
-        log.info('No user for contribution {c}; '
-                 'not creating purchase record'.format(c=instance))
         return
 
     log.debug('Processing addon purchase type: %s, addon %s, user %s'

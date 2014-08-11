@@ -5,7 +5,7 @@ from urlparse import urlparse
 
 from django.conf import settings
 from django.core.files.storage import default_storage as storage
-from django.http import HttpResponse, HttpResponseNotFound
+from django.http import HttpResponse, Http404
 from django.shortcuts import render
 
 import jingo
@@ -48,30 +48,40 @@ def get_imgurls(repo):
 
 def commonplace(request, repo, **kwargs):
     if repo not in settings.COMMONPLACE_REPOS:
-        return HttpResponseNotFound
+        raise Http404
 
     BUILD_ID = get_build_id(repo)
-
-    if not waffle.switch_is_active('firefox-accounts'):
-        site_settings = {
-            'persona_unverified_issuer': settings.BROWSERID_DOMAIN,
-        }
-    else:
-        site_settings = {}
 
     ua = request.META.get('HTTP_USER_AGENT', '').lower()
 
     include_persona = True
+    include_splash = False
     if repo == 'fireplace':
+        include_splash = True
         if (request.GET.get('nativepersona') or
             'mccs' in request.GET or
             ('mcc' in request.GET and 'mnc' in request.GET)):
             include_persona = False
+    elif repo == 'discoplace':
+        include_persona = False
+        include_splash = True
+
+    if waffle.switch_is_active('firefox-accounts'):
+        # We never want to include persona shim if firefox accounts is enabled:
+        # native fxa already provides navigator.id, and fallback fxa doesn't
+        # need it.
+        include_persona = False
+        site_settings = {}
+    else:
+        site_settings = {
+            'persona_unverified_issuer': settings.BROWSERID_DOMAIN,
+        }
 
     ctx = {
         'BUILD_ID': BUILD_ID,
         'appcache': repo in settings.COMMONPLACE_REPOS_APPCACHED,
         'include_persona': include_persona,
+        'include_splash': include_splash,
         'repo': repo,
         'robots': 'googlebot' in ua,
         'site_settings': site_settings,
@@ -90,7 +100,7 @@ def appcache_manifest(request):
     """Serves the appcache manifest."""
     repo = request.GET.get('repo')
     if not repo or repo not in settings.COMMONPLACE_REPOS_APPCACHED:
-        return HttpResponseNotFound()
+        raise Http404
     template = appcache_manifest_template(repo)
     return HttpResponse(template, content_type='text/cache-manifest')
 

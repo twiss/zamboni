@@ -10,14 +10,11 @@ import amo.tests
 import mkt.feed.constants as feed
 from mkt.feed import serializers
 from mkt.feed.constants import COLLECTION_LISTING, COLLECTION_PROMO
-from mkt.feed.models import FeedBrand, FeedShelf
+from mkt.feed.models import FeedShelf
 from mkt.feed.tests.test_models import FeedAppMixin, FeedTestMixin
-from mkt.feed.serializers import (FeedAppSerializer, FeedBrandSerializer,
-                                  FeedCollectionSerializer,
-                                  FeedShelfSerializer, FeedItemSerializer)
 from mkt.regions import RESTOFWORLD
-from mkt.webapps.models import Preview
 from mkt.webapps.indexers import WebappIndexer
+from mkt.webapps.models import Preview
 
 
 class TestFeedAppSerializer(FeedTestMixin, amo.tests.TestCase):
@@ -72,6 +69,20 @@ class TestFeedAppESSerializer(FeedTestMixin, amo.tests.TestCase):
         }, many=True).data
         eq_(data[0]['app']['id'], self.feedapp.app_id)
         eq_(data[1]['description']['en-US'], 'test')
+
+    def test_background_image(self):
+        self.feedapp.update(type=feed.FEEDAPP_IMAGE, image_hash='LOL')
+        self.data_es = self.feedapp.get_indexer().extract_document(
+            None, obj=self.feedapp)
+        self.app_map = {
+            self.feedapp.app_id: WebappIndexer.extract_document(
+                self.feedapp.app_id)
+        }
+        data = serializers.FeedAppESSerializer(self.data_es, context={
+            'app_map': self.app_map,
+            'request': amo.tests.req_factory_factory('')
+        }).data
+        assert data['background_image'].endswith('image.png?LOL')
 
 
 class TestFeedBrandSerializer(FeedTestMixin, amo.tests.TestCase):
@@ -186,6 +197,60 @@ class TestFeedCollectionESSerializer(FeedTestMixin, amo.tests.TestCase):
             else:
                 eq_(group, 'second-group')
 
+    def test_background_image(self):
+        self.collection.update(type=feed.COLLECTION_PROMO, image_hash='LOL')
+        self.data_es = self.collection.get_indexer().extract_document(
+            None, obj=self.collection)
+        data = serializers.FeedCollectionESSerializer(self.data_es, context={
+            'app_map': self.app_map,
+            'request': amo.tests.req_factory_factory('')
+        }).data
+        assert data['background_image'].endswith('image.png?LOL')
+
+    def test_home_serializer_listing_coll(self):
+        """Test the listing collection is using ESAppFeedSerializer."""
+        self.collection.update(type=feed.COLLECTION_LISTING)
+        self.data_es = self.collection.get_indexer().extract_document(
+            None, obj=self.collection)
+        data = serializers.FeedCollectionESHomeSerializer(self.data_es,
+            context={'app_map': self.app_map,
+                     'request': amo.tests.req_factory_factory('')}
+        ).data
+        assert 'author' in data['apps'][0]
+        assert data['apps'][0]['name']
+        assert data['apps'][0]['ratings']
+        assert data['apps'][0]['icons']
+
+    def test_home_serializer_promo_coll(self):
+        """
+        Test the listing collection is using
+        ESAppFeedCollectionSerializer if no background image.
+        """
+        self.collection.update(type=feed.COLLECTION_PROMO)
+        self.data_es = self.collection.get_indexer().extract_document(
+            None, obj=self.collection)
+        data = serializers.FeedCollectionESHomeSerializer(self.data_es,
+            context={'app_map': self.app_map,
+                     'request': amo.tests.req_factory_factory('')}
+        ).data
+        assert 'author' not in data['apps'][0]
+        assert 'name' not in data['apps'][0]
+        assert 'ratings' not in data['apps'][0]
+        assert data['apps'][0]['icons']
+
+    def test_home_serializer_promo_coll_bg_image(self):
+        """
+        Test the listing collection does not return apps if background image.
+        """
+        self.collection.update(type=feed.COLLECTION_PROMO, image_hash='#swag')
+        self.data_es = self.collection.get_indexer().extract_document(
+            None, obj=self.collection)
+        data = serializers.FeedCollectionESHomeSerializer(self.data_es,
+            context={'app_map': self.app_map,
+                     'request': amo.tests.req_factory_factory('')}
+        ).data
+        assert not data['apps']
+
 
 class TestFeedShelfSerializer(FeedTestMixin, amo.tests.TestCase):
 
@@ -198,6 +263,13 @@ class TestFeedShelfSerializer(FeedTestMixin, amo.tests.TestCase):
         data = serializers.FeedShelfSerializer(self.shelf).data
         eq_(data['slug'], self.shelf.slug)
         self.assertSetEqual([app['id'] for app in data['apps']], self.app_ids)
+
+    def test_is_published(self):
+        data = serializers.FeedShelfSerializer(self.shelf).data
+        assert not data['is_published']
+        self.shelf.feeditem_set.create()
+        data = serializers.FeedShelfSerializer(self.shelf).data
+        assert data['is_published']
 
 
 class TestFeedShelfESSerializer(FeedTestMixin, amo.tests.TestCase):
@@ -226,6 +298,16 @@ class TestFeedShelfESSerializer(FeedTestMixin, amo.tests.TestCase):
         eq_(data['region'], 'restofworld')
         eq_(data['description']['de'], 'test')
         eq_(data['name']['en-US'], 'test')
+
+    def test_background_image(self):
+        self.shelf.update(image_hash='LOL')
+        self.data_es = self.shelf.get_indexer().extract_document(
+            None, obj=self.shelf)
+        data = serializers.FeedShelfESSerializer(self.data_es, context={
+            'app_map': self.app_map,
+            'request': amo.tests.req_factory_factory('')
+        }).data
+        assert data['background_image'].endswith('image.png?LOL')
 
 
 class TestFeedItemSerializer(FeedAppMixin, amo.tests.TestCase):
@@ -322,5 +404,5 @@ class TestFeedItemESSerializer(FeedTestMixin, amo.tests.TestCase):
         eq_(data[2]['collection']['apps'][0]['id'],
             self.feed[2].collection.apps()[0].id)
 
-        eq_(data[3]['shelf']['apps'][0]['id'],
-            self.feed[3].shelf.apps()[0].id)
+        assert data[3]['shelf']['carrier']
+        assert data[3]['shelf']['region']

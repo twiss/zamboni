@@ -12,7 +12,7 @@ from mkt.developers.api_payments import (
     AddonPaymentAccountViewSet, PaymentAccountViewSet, PaymentCheckViewSet,
     PaymentDebugViewSet, UpsellViewSet)
 from mkt.developers.views import ContentRatingList, ContentRatingsPingback
-from mkt.inapp.views import InAppProductViewSet
+from mkt.inapp.views import InAppProductViewSet, StubInAppProductViewSet
 from mkt.receipts.urls import test_patterns
 
 from . import views
@@ -61,7 +61,7 @@ app_detail_patterns = patterns('',
     url('^status$', views.status, name='mkt.developers.apps.versions'),
     url('^blocklist$', views.blocklist, name='mkt.developers.apps.blocklist'),
 
-     # Only present if DEBUG=True.
+    # Only present if DEBUG=True.
     url('^debug/', views.debug, name='mkt.developers.debug'),
 
     # IARC content ratings.
@@ -161,6 +161,9 @@ urlpatterns = decorate(write, patterns('',
     url('^terms$', views.terms, name='mkt.developers.apps.terms'),
     url('^api$', views.api, name='mkt.developers.apps.api'),
 
+    # Set the developer Message of the Day.
+    url('^motd$', views.motd, name='mkt.developers.motd'),
+
     # Developer docs
     url('docs/(?P<doc_name>[-_\w]+)?$',
         views.docs, name='mkt.developers.docs'),
@@ -183,6 +186,8 @@ api_payments.register(r'account', PaymentAccountViewSet,
 api_payments.register(r'upsell', UpsellViewSet, base_name='app-upsell')
 api_payments.register(r'app', AddonPaymentAccountViewSet,
                       base_name='app-payment-account')
+api_payments.register(r'stub-in-app-products', StubInAppProductViewSet,
+                      base_name='stub-in-app-products')
 
 in_app_products = SimpleRouter()
 in_app_products.register(r'in-app', InAppProductViewSet,
@@ -196,7 +201,7 @@ app_payments.register(r'payments/debug', PaymentDebugViewSet,
 
 payments_api_patterns = patterns('',
     url(r'^payments/', include(api_payments.urls)),
-    url(r'^payments/(?P<app_slug>[^\/]+)/', include(in_app_products.urls)),
+    url(r'^payments/(?P<origin>(app|https?)://[^/]+)/', include(in_app_products.urls)),
     url(r'^apps/app/', include(app_payments.urls)),
 )
 

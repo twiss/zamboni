@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-import amo.tests
-from amo.utils import to_language
-from constants.applications import DEVICE_TYPES
-
 from nose.tools import eq_, ok_
 
+import amo.tests
 import mkt
+from amo.utils import to_language
+from mkt.constants.applications import DEVICE_TYPES
 from mkt.reviewers.models import EscalationQueue
 from mkt.site.fixtures import fixture
 from mkt.webapps.indexers import WebappIndexer
@@ -32,7 +31,7 @@ class TestWebappIndexer(amo.tests.TestCase):
         mapping = WebappIndexer.get_mapping()
         eq_(mapping.keys(), ['webapp'])
         eq_(mapping['webapp']['_all'], {'enabled': False})
-        eq_(mapping['webapp']['_boost'], {'name': '_boost', 'null_value': 1.0})
+        eq_(mapping['webapp']['properties']['boost'], {'type': 'long'})
 
     def test_mapping_properties(self):
         # Spot check a few of the key properties.

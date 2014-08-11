@@ -64,6 +64,10 @@ urlpatterns = patterns('',
     url('^statistics/.*$', views.commonplace, {'repo': 'marketplace-stats'},
         name='commonplace.stats'),
 
+    # Discoplace:
+    url('^discovery/.*$', views.commonplace, {'repo': 'discoplace'},
+        name='commonplace.discoplace'),
+
     url('^manifest.appcache$', views.appcache_manifest,
         name='commonplace.appcache'),
 )
@@ -72,11 +76,14 @@ if settings.DEBUG:
     # More Fireplace stuff, only for local dev:
     urlpatterns += patterns('',
         fireplace_route('category/.*'),
+        fireplace_route('categories'),
         fireplace_route('collection/.*'),
         fireplace_route('debug'),
         fireplace_route('feed/.*'),
         fireplace_route('feedback'),
         fireplace_route('fxa-authorize'),
+        fireplace_route('new'),
+        fireplace_route('popular'),
         fireplace_route('privacy-policy'),
         fireplace_route('purchases'),
         fireplace_route('search/?'),

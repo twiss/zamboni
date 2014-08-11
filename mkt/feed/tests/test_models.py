@@ -4,6 +4,7 @@ import string
 
 from django.core.exceptions import ValidationError
 
+import mock
 from nose.tools import eq_, ok_
 
 import amo.tests
@@ -63,10 +64,10 @@ class FeedTestMixin(object):
         return shelf
 
     def feed_item_factory(self, carrier=1, region=1,
-                          item_type=feed.FEED_TYPE_APP):
+                          item_type=feed.FEED_TYPE_APP, **kw):
         """Creates a single FeedItem of any feed element type specified."""
         feed_item = FeedItem(carrier=carrier, region=region,
-                             item_type=item_type)
+                             item_type=item_type, **kw)
 
         if item_type == feed.FEED_TYPE_APP:
             feed_item.app = self.feed_app_factory()
@@ -237,3 +238,32 @@ class TestFeedBrand(amo.tests.TestCase):
         self.test_add_app_sort_order_respected()
         with self.assertRaises(Webapp.DoesNotExist):
             self.brand.set_apps([99999])
+
+
+class TestESReceivers(FeedTestMixin, amo.tests.TestCase):
+
+    @mock.patch('mkt.search.indexers.BaseIndexer.index_ids')
+    def test_update_search_index(self, update_mock):
+        feed_items = self.feed_factory()
+        calls = [update_call[0][0][0] for update_call in
+                 update_mock.call_args_list]
+        for feed_item in feed_items:
+            assert feed_item.id in calls
+            assert getattr(feed_item, feed_item.item_type).id in calls
+
+    @mock.patch('mkt.search.indexers.BaseIndexer.unindex')
+    def test_delete_search_index(self, delete_mock):
+        for x in xrange(4):
+            self.feed_item_factory()
+        count = FeedItem.objects.count()
+        FeedItem.objects.all().delete()
+        eq_(delete_mock.call_count, count)
+
+
+class TestFeedShelf(FeedTestMixin, amo.tests.TestCase):
+
+    def test_is_published(self):
+        shelf = self.feed_shelf_factory()
+        assert not shelf.is_published
+        shelf.feeditem_set.create()
+        assert shelf.is_published

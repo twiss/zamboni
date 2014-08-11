@@ -43,6 +43,7 @@ from mkt.users.models import UserProfile
 from mkt.versions.models import Version
 from mkt.webapps.models import (Addon, AddonDeviceType, AddonUpsell, AddonUser,
                                 Webapp)
+from mkt.zadmin.models import get_config, set_config
 
 
 class AppHubTest(amo.tests.TestCase):
@@ -928,6 +929,62 @@ class TestUploadDetail(BaseUploadTest):
                     args=['hosted', upload.uuid]))
         eq_(suite('#suite-results-tier-2').length, 1)
 
+    def test_detail_view_linkification(self):
+        uid = '9b1b3898db8a4d99a049829a46969ab4'
+        upload = FileUpload.objects.create(
+            name='something.zip',
+            validation=json.dumps({
+                u'ending_tier': 1,
+                u'success': False,
+                u'warnings': 0,
+                u'errors': 1,
+                u'notices': 0,
+                u'feature_profile': [],
+                u'messages': [
+                    {
+                        u'column': None,
+                        u'context': [
+                            u'',
+                            u'<button on-click="{{ port.name }}">uh</button>',
+                            u''
+                        ],
+                        u'description': [
+                            u'http://www.firefox.com'
+                            u'<script>alert("hi");</script>',
+                        ],
+                        u'file': u'index.html',
+                        u'id': [u'csp', u'script_attribute'],
+                        u'line': 1638,
+                        u'message': u'CSP Violation Detected',
+                        u'tier': 2,
+                        u'type': u'error',
+                        u'uid': uid,
+                    },
+                ],
+                u'metadata': {'ran_js_tests': 'yes'},
+                u'manifest': {},
+                u'feature_usage': [],
+                u'permissions': [],
+
+            }),
+        )
+        r = self.client.get(reverse('mkt.developers.standalone_upload_detail',
+                                    args=['packaged', upload.uuid]))
+        eq_(r.status_code, 200)
+        data = json.loads(r.content)
+        message = data['validation']['messages'][0]
+        description = message['description'][0]
+        eq_(description,
+            '<a rel="nofollow" href="http://outgoing.mozilla.org/v1/'
+            '680c0c59e4d87f3d21faf1d7365f0fec615076041466406aa3608fe6503aef43'
+            '/http%3A//www.firefox.com">'
+            'http://www.firefox.com</a>'
+            '&lt;script&gt;alert("hi");&lt;/script&gt;')
+        context = message['context'][1]
+        eq_(context,
+            '&lt;button on-click=&#34;{{ port.name }}&#34;&gt;'
+            'uh&lt;/button&gt;')
+
 
 def assert_json_error(request, field, msg):
     eq_(request.status_code, 400)
@@ -1024,6 +1081,17 @@ class TestEnableDisable(amo.tests.TestCase):
         eq_(self.webapp.reload().disabled_by_user, False)
 
     def test_disable(self):
+        self.client.post(self.disable_url)
+        eq_(self.webapp.reload().disabled_by_user, True)
+
+    def test_disable_deleted_versions(self):
+        """
+        Test when we disable an app with deleted versions we don't include
+        the deleted version's files when calling `hide_disabled_file` or we'll
+        cause server errors b/c we can't query the version.
+        """
+        self.webapp.update(is_packaged=True)
+        self.webapp.latest_version.update(deleted=True)
         self.client.post(self.disable_url)
         eq_(self.webapp.reload().disabled_by_user, True)
 
@@ -1344,3 +1412,59 @@ class TestContentRatingsSuccessMsg(amo.tests.TestCase):
         eq_(_ratings_success_msg(self.app, amo.STATUS_PENDING,
                                  self.days_ago(5).isoformat()),
             _submission_msgs()['content_ratings_saved'])
+
+
+class TestMessageOfTheDay(amo.tests.TestCase):
+    fixtures = fixture('user_editor', 'user_999')
+
+    def setUp(self):
+        self.login('editor')
+        self.url = reverse('mkt.developers.motd')
+        self.key = u'mkt_developers_motd'
+        set_config(self.key, u'original value')
+
+    def test_not_logged_in(self):
+        self.client.logout()
+        req = self.client.get(self.url, follow=True)
+        self.assertLoginRedirects(req, self.url)
+
+    def test_perms_not_editor(self):
+        self.client.logout()
+        self.login('regular')
+        eq_(self.client.get(self.url).status_code, 403)
+
+    def test_perms_not_motd(self):
+        # You can't see the edit page if you can't edit it.
+        req = self.client.get(self.url)
+        eq_(req.status_code, 403)
+
+    def test_motd_form_initial(self):
+        # Only users in the MOTD group can POST.
+        user = UserProfile.objects.get(email='editor@mozilla.com')
+        self.grant_permission(user, 'DeveloperMOTD:Edit')
+
+        # Get is a 200 with a form.
+        req = self.client.get(self.url)
+        eq_(req.status_code, 200)
+        eq_(req.context['form'].initial['motd'], u'original value')
+
+    def test_motd_empty_post(self):
+        # Only users in the MOTD group can POST.
+        user = UserProfile.objects.get(email='editor@mozilla.com')
+        self.grant_permission(user, 'DeveloperMOTD:Edit')
+
+        # Empty post throws an error.
+        req = self.client.post(self.url, dict(motd=''))
+        eq_(req.status_code, 200)  # Didn't redirect after save.
+        eq_(pq(req.content)('#editor-motd .errorlist').text(),
+            'This field is required.')
+
+    def test_motd_real_post(self):
+        # Only users in the MOTD group can POST.
+        user = UserProfile.objects.get(email='editor@mozilla.com')
+        self.grant_permission(user, 'DeveloperMOTD:Edit')
+
+        # A real post now.
+        req = self.client.post(self.url, dict(motd='new motd'))
+        self.assert3xx(req, self.url)
+        eq_(get_config(self.key), u'new motd')

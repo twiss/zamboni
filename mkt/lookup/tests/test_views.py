@@ -21,10 +21,11 @@ import amo
 import amo.tests
 from amo.tests import (addon_factory, app_factory, ESTestCase,
                        req_factory_factory, TestCase)
-from constants.payments import PROVIDER_BANGO, PROVIDER_BOKU
 from mkt.abuse.models import AbuseReport
 from mkt.access.models import Group, GroupUser
-from mkt.constants.payments import COMPLETED, FAILED, PENDING, REFUND_STATUSES
+from mkt.constants.payments import (COMPLETED, FAILED, PENDING,
+                                    SOLITUDE_REFUND_STATUSES)
+from mkt.constants.payments import PROVIDER_BANGO, PROVIDER_BOKU
 from mkt.developers.models import (ActivityLog, AddonPaymentAccount,
                                    PaymentAccount, SolitudeSeller)
 from mkt.developers.providers import get_provider
@@ -434,7 +435,7 @@ class TestTransactionSummary(TestCase):
         self.create_test_refund()
         data = _transaction_summary(self.uuid)
 
-        eq_(data['refund_status'], REFUND_STATUSES[PENDING])
+        eq_(data['refund_status'], SOLITUDE_REFUND_STATUSES[PENDING])
 
     @mock.patch('mkt.lookup.views.client')
     def test_is_refundable(self, solitude):
@@ -503,9 +504,8 @@ class TestTransactionRefund(TestCase):
 
     def request(self, data):
         req = RequestFactory().post(self.url, data)
-        req.user = req.amo_user = UserProfile.objects.get(
-            username='support_staff')
-        req.groups = req.amo_user.groups.all()
+        req.user = UserProfile.objects.get(username='support_staff')
+        req.groups = req.user.groups.all()
         return req
 
     def refund_tx_ret(self):
@@ -652,6 +652,7 @@ class TestAppSearch(ESTestCase, SearchTestMixin):
         eq_(data['results'][0]['id'], self.app.pk)
         eq_(data['results'][0]['url'], reverse('lookup.app_summary',
                                                args=[self.app.pk]))
+        eq_(data['results'][0]['app_slug'], self.app.app_slug)
 
     def test_by_name_part(self):
         self.app.name = 'This is Steamcube'

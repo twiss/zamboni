@@ -17,7 +17,6 @@ from tower import ugettext as _
 import amo
 import amo.log
 from amo.decorators import json_view, post_required, write
-from constants.payments import CONTRIB_NO_CHARGE
 from lib.cef_loggers import receipt_cef
 from lib.crypto.receipt import SigningError
 from lib.metrics import record_action
@@ -26,18 +25,19 @@ from mkt.api.authentication import (RestOAuthAuthentication,
                                     RestSharedSecretAuthentication)
 from mkt.api.base import cors_api_view
 from mkt.constants import apps
+from mkt.constants.payments import CONTRIB_NO_CHARGE
 from mkt.developers.models import AppLog
-from mkt.installs.utils import record as utils_record
 from mkt.installs.utils import install_type
+from mkt.installs.utils import record as utils_record
 from mkt.prices.models import AddonPurchase
 from mkt.receipts import forms
 from mkt.receipts.utils import (create_receipt, create_test_receipt, get_uuid,
                                 reissue_receipt)
 from mkt.reviewers.views import reviewer_required
+from mkt.users.models import UserProfile
 from mkt.webapps.decorators import app_view_factory
 from mkt.webapps.models import Addon, Installed, Webapp
 from services.verify import get_headers, Verify
-from mkt.users.models import UserProfile
 
 
 log = commonware.log.getLogger('z.receipts')
@@ -64,7 +64,7 @@ def _record(request, addon):
             raise http.Http404
 
         if (premium and
-            not addon.has_purchased(request.amo_user) and
+            not addon.has_purchased(request.user) and
             not is_reviewer and not is_dev):
             raise PermissionDenied
 
@@ -75,15 +75,15 @@ def _record(request, addon):
                    else apps.INSTALL_TYPE_USER)
         # Log the install.
         installed, c = Installed.objects.get_or_create(addon=addon,
-            user=request.amo_user, install_type=install)
+            user=request.user, install_type=install)
 
         # Get a suitable uuid for this receipt.
-        uuid = get_uuid(addon, request.amo_user)
+        uuid = get_uuid(addon, request.user)
 
         error = ''
         receipt_cef.log(request, addon, 'sign', 'Receipt requested')
         try:
-            receipt = create_receipt(addon, request.amo_user, uuid)
+            receipt = create_receipt(addon, request.user, uuid)
         except SigningError:
             error = _('There was a problem installing the app.')
 
@@ -158,7 +158,7 @@ def verify(request, uuid):
 @json_view
 @post_required
 def issue(request, addon):
-    user = request.amo_user
+    user = request.user
     review = acl.action_allowed_user(user, 'Apps', 'Review') if user else None
     developer = addon.has_author(user)
     if not (review or developer):
@@ -167,7 +167,7 @@ def issue(request, addon):
     install, flavour = ((apps.INSTALL_TYPE_REVIEWER, 'reviewer') if review
                         else (apps.INSTALL_TYPE_DEVELOPER, 'developer'))
     installed, c = Installed.objects.safer_get_or_create(addon=addon,
-        user=request.amo_user, install_type=install)
+        user=request.user, install_type=install)
 
     error = ''
     receipt_cef.log(request, addon, 'sign', 'Receipt signing for %s' % flavour)
@@ -253,16 +253,17 @@ def install(request):
             return Response('App not public.', status=403)
 
         if (obj.is_premium() and
-            not obj.has_purchased(request.amo_user)):
+            not obj.has_purchased(request.user)):
             # Apps that are premium but have no charge will get an
             # automatic purchase record created. This will ensure that
             # the receipt will work into the future if the price changes.
             if obj.premium and not obj.premium.price.price:
                 log.info('Create purchase record: {0}'.format(obj.pk))
                 AddonPurchase.objects.get_or_create(addon=obj,
-                    user=request.amo_user, type=CONTRIB_NO_CHARGE)
+                    user=request.user, type=CONTRIB_NO_CHARGE)
             else:
-                log.info('App not purchased: %s' % obj.pk)
+                log.info('App not purchased: app ID={a}; user={u}'
+                         .format(a=obj.pk, u=request.user))
                 return Response('You have not purchased this app.', status=402)
         receipt = install_record(obj, request, type_)
     utils_record(request, obj)

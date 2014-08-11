@@ -11,7 +11,7 @@ import uuid
 
 from django.conf import settings
 from django.core.cache import cache
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.storage import default_storage as storage
 from django.core.urlresolvers import NoReverseMatch, reverse
 from django.db import models, transaction
@@ -22,11 +22,11 @@ from django.utils.translation import trans_real as translation
 import caching.base as caching
 import commonware.log
 import json_field
-import waffle
 from cache_nuggets.lib import memoize, memoize_key
-from elasticutils.contrib.django import F
+from elasticsearch_dsl import F, filter as es_filter
 from jinja2.filters import do_dictsort
-from tower import ugettext as _, ugettext_lazy as _lazy
+from tower import ugettext as _
+from tower import ugettext_lazy as _lazy
 
 import amo
 import amo.models
@@ -34,11 +34,9 @@ import mkt
 from amo.decorators import skip_cache, use_master, write
 from amo.helpers import absolutify
 from amo.storage_utils import copy_stored_file
-from amo.utils import (attach_trans_dict, find_language, JSONEncoder,
-                       send_mail, slugify, smart_path, sorted_groupby, timer,
-                       to_language, urlparams)
-from constants.applications import DEVICE_TYPES
-from constants.payments import PROVIDER_CHOICES
+from amo.utils import (attach_trans_dict, find_language, JSONEncoder, send_mail,
+                       slugify, smart_path, sorted_groupby, timer, to_language,
+                       urlparams)
 from lib.crypto import packaged
 from lib.iarc.client import get_iarc_client
 from lib.iarc.utils import get_iarc_app_title, render_xml
@@ -46,6 +44,8 @@ from lib.utils import static_url
 from mkt.access import acl
 from mkt.access.acl import action_allowed, check_reviewer
 from mkt.constants import APP_FEATURES, apps, iarc_mappings
+from mkt.constants.applications import DEVICE_TYPES
+from mkt.constants.payments import PROVIDER_CHOICES
 from mkt.files.models import File, nfd_str, Platform
 from mkt.files.utils import parse_addon, WebAppParser
 from mkt.prices.models import AddonPremium, Price
@@ -311,17 +311,14 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
     def delete(self, msg='', reason=''):
         # To avoid a circular import.
         from . import tasks
-        # Check for soft deletion path. Happens only if the addon status isn't
-        # 0 (STATUS_INCOMPLETE), or when we are in Marketplace.
+
         if self.status == amo.STATUS_DELETED:
-            # We're already done.
-            return
+            return  # We're already done.
 
         id = self.id
 
         # Tell IARC this app is delisted from the set_iarc_storefront_data.
-        if self.type == amo.ADDON_WEBAPP:
-            self.set_iarc_storefront_data(disable=True)
+        tasks.set_storefront_data.delay(self.pk, disable=True)
 
         # Fetch previews before deleting the addon instance, so that we can
         # pass the list of files to delete to the delete_preview_files task
@@ -342,7 +339,7 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
             'msg': msg,
             'reason': reason,
             'name': self.name,
-            'slug': self.slug,
+            'slug': self.app_slug,
             'total_downloads': self.total_downloads,
             'url': absolutify(self.get_url_path()),
             'user_str': ("%s, %s (%s)" % (user.display_name or
@@ -448,6 +445,11 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
     def language_ascii(self):
         lang = translation.to_language(self.default_locale)
         return settings.LANGUAGES.get(lang)
+
+    def update_status(self, **kwargs):
+        # Kept here as a placeholder for Addons. Remove or ignore when Addon
+        # and Webapp models are merged.
+        return
 
     @property
     def valid_file_statuses(self):
@@ -614,29 +616,6 @@ class Addon(amo.models.OnChangeMixin, amo.models.ModelBase):
             suffix = getattr(self, 'icon_hash', None) or 'never'
             return static_url('ADDON_ICON_URL') % (
                 split_id.group(2) or 0, self.id, size, suffix)
-
-    @write
-    def update_status(self):
-        if (self.status in [amo.STATUS_NULL, amo.STATUS_DELETED] or
-            self.is_disabled):
-            return
-
-        def logit(reason, old=self.status):
-            log.info('Changing addon status [%s]: %s => %s (%s).'
-                     % (self.id, old, self.status, reason))
-            amo.log(amo.LOG.CHANGE_STATUS, self.get_status_display(), self)
-
-        versions = self.versions.all()
-        if not versions.exists():
-            self.update(status=amo.STATUS_NULL)
-            logit('no versions')
-        elif not (versions.filter(files__isnull=False).exists()):
-            self.update(status=amo.STATUS_NULL)
-            logit('no versions with files')
-        elif (self.status == amo.STATUS_PUBLIC and
-              not versions.filter(files__status=amo.STATUS_PUBLIC).exists()):
-            self.update(status=amo.STATUS_PENDING)
-            logit('no reviewed files')
 
     @staticmethod
     def attach_related_versions(addons, addon_dict=None):
@@ -1134,13 +1113,6 @@ class AddonType(amo.models.ModelBase):
 
     def __unicode__(self):
         return unicode(self.name)
-
-    def get_url_path(self):
-        try:
-            type = amo.ADDON_SLUGS[self.id]
-        except KeyError:
-            return None
-        return reverse('browse.%s' % type)
 
 
 dbsignals.pre_save.connect(save_signal, sender=AddonType,
@@ -1794,8 +1766,7 @@ class Webapp(Addon):
         self.update(status=amo.WEBAPPS_UNREVIEWED_STATUS)
 
     def update_status(self, **kwargs):
-        if (self.is_deleted or self.is_disabled or
-            self.status == amo.STATUS_BLOCKED):
+        if self.is_deleted or self.status == amo.STATUS_BLOCKED:
             return
 
         def _log(reason, old=self.status):
@@ -1861,7 +1832,7 @@ class Webapp(Addon):
         by the developer.
         """
         # Let developers see it always.
-        can_see = (self.has_author(request.amo_user) or
+        can_see = (self.has_author(request.user) or
                    action_allowed(request, 'Apps', 'Edit'))
 
         # Let app reviewers see it only when it's pending.
@@ -2041,9 +2012,8 @@ class Webapp(Addon):
                     mobile=False, tablet=False, filter_overrides=None):
 
         filters = {
-            'type': amo.ADDON_WEBAPP,
-            'status': amo.STATUS_PUBLIC,
-            'is_disabled': False,
+            'status': F('term', status=amo.STATUS_PUBLIC),
+            'is_disabled': F('term', is_disabled=False),
         }
 
         # Special handling if status is 'any' to remove status filter.
@@ -2056,18 +2026,18 @@ class Webapp(Addon):
             filters.update(filter_overrides)
 
         if cat:
-            filters.update(category=cat.slug)
+            filters.update({'category': F('term', category=cat.slug)})
 
-        srch = WebappIndexer.search().filter(**filters)
+        sq = WebappIndexer.search().filter(
+            es_filter.Bool(must=filters.values()))
 
-        if (region and
-            not waffle.flag_is_active(request, 'override-region-exclusion')):
-            srch = srch.filter(~F(region_exclusions=region.id))
+        if region:
+            sq = sq.filter(~F('term', region_exclusions=region.id))
 
         if mobile or gaia:
-            srch = srch.filter(uses_flash=False)
+            sq = sq.filter('term', uses_flash=False)
 
-        return srch
+        return sq
 
     def in_rereview_queue(self):
         return self.rereviewqueue_set.exists()
@@ -2394,8 +2364,6 @@ class Webapp(Addon):
         log.info('IARC content ratings set for app:%s:%s' %
                  (self.id, self.app_slug))
 
-        self.set_iarc_storefront_data()  # Ratings updated, sync with IARC.
-
         geodata, c = Geodata.objects.get_or_create(addon=self)
         save = False
 
@@ -2604,11 +2572,13 @@ def watch_status(old_attr={}, new_attr={}, instance=None, sender=None, **kw):
 def watch_disabled(old_attr={}, new_attr={}, instance=None, sender=None, **kw):
     attrs = dict((k, v) for k, v in old_attr.items()
                  if k in ('disabled_by_user', 'status'))
+    qs = (File.objects.filter(version__addon=instance.id)
+                      .exclude(version__deleted=True))
     if Addon(**attrs).is_disabled and not instance.is_disabled:
-        for f in File.objects.filter(version__addon=instance.id):
+        for f in qs:
             f.unhide_disabled_file()
     if instance.is_disabled and not Addon(**attrs).is_disabled:
-        for f in File.objects.filter(version__addon=instance.id):
+        for f in qs:
             f.hide_disabled_file()
 
 

@@ -35,7 +35,9 @@ Feed
     which currently includes:
 
     - All the :ref:`feed items <feed-items>`.
-    - The :ref:`operator shelf <feed-shelves>`, if available.
+
+    If an operator shelf is available for the passed in carrier + region, it
+    appear first in the list of feed items in the respnse.
 
 
     **Request**
@@ -50,30 +52,23 @@ Feed
 
     **Response**
 
-    :param feed: An ordered list of :ref:`feed items <feed-items>` for the
+    :param objects: An ordered list of :ref:`feed items <feed-items>` for the
         user.
-    :type feed: array
-    :param shelf: The :ref:`operator shelf <feed-shelves>` for the passed
-        region and carrier pair.
-    :type shelf: object
+    :type objects: array
 
     .. code-block:: json
 
         {
-            "feed": [
+            "objects": [
                 {
                     "id": 343,
-                    "other": "data"
+                    ...
                 },
                 {
                     "id": 518,
-                    "other": "data"
+                    ...
                 }
             ],
-            "shelf": {
-                "id": 101,
-                "other": "data"
-            }
         }
 
 
@@ -282,52 +277,6 @@ Delete
     :status 403: not authorized.
 
 
-Builder
-=======
-
-.. http:put:: /api/v2/feed/builder/
-
-    Sets feeds by region. For each region passed in, the builder
-    will delete all of the carrier-less :ref:`feed items <feed-items>` for
-    that region and then batch create feed items in the order that feed
-    element IDs are passed in for that region.
-
-    **Request**
-
-    .. code-block:: json
-
-        {
-            'us': [
-                ['collection', 52],
-                ['app', 36],
-                ['brand, 123],
-                ['app', 66]
-            ],
-            'cn': [
-                ['app', 36],
-                ['collection', 52],
-                ['brand', 2313]
-                ['brand, 123],
-            ],
-            'hu': [],  // Passing in an empty array will empty that feed.
-        }
-
-    - The keys of the request are region slugs.
-    - The region slugs point to two-element arrays.
-    - The first element of the array is the item type. It can be
-        ``app``, ``collection``, or ``brand``.
-    - The second element of the array is the ID of a feed element.
-    - It can be the ID of a :ref:`FeedApp  <feed-apps>`, or
-        :ref:`FeedBrand <feed-brands>`.
-    - Order matters.
-
-    **Response**
-
-    :status 201: success.
-    :status 400: bad request.
-    :status 403: not authorized.
-
-
 .. _feed-apps:
 
 ---------
@@ -440,6 +389,8 @@ Create
     :type app: int|null
     :param background_color: color in six-digit hex (with hash prefix)
     :type background_color: string
+    :param background_image_upload_url: a URL pointing to an image
+    :type background_image_upload_url: string
     :param description: a :ref:`translated <overview-translations>` description
         of the app being featured.
     :type description: object|null
@@ -467,6 +418,7 @@ Create
         {
             "app": 710,
             "background_color": "#A90000",
+            "background_image_upload_url": "http://imgur.com/XXX.jpg",
             "description": {
                 "en-US": "A featured app",
                 "fr": "Une application sélectionnée"
@@ -502,6 +454,8 @@ Update
     :type app: int|null
     :param background_color: color in six-digit hex (with hash prefix)
     :type background_color: string
+    :param background_image_upload_url: a URL pointing to an image
+    :type background_image_upload_url: string
     :param description: a :ref:`translated <overview-translations>` description
         of the app being featured.
     :type description: object|null
@@ -785,7 +739,7 @@ Feed collections are represented thusly:
                     'en-US': 'Games',
                     'fr': 'Jeux'
                 },
-                'other_fields': 'other_values'
+                ...
             },
             {
                 'id': 2,
@@ -793,7 +747,7 @@ Feed collections are represented thusly:
                     'en-US': 'Games',
                     'fr': 'Jeux'
                 },
-                'other_fields': 'other_values'
+                ...
             },
             {
                 'id': 3,
@@ -801,7 +755,7 @@ Feed collections are represented thusly:
                     'en-US': 'Tools',
                     'fr': 'Outils'
                 },
-                'other_fields': 'other_values'
+                ...
             }
         ],
         'background_color': '#00AACC',
@@ -867,14 +821,14 @@ two forms:
                 'apps': [1, 18, 3],
                 'name': {
                     'en-US': 'Games',
-                    'fr': 'Jeux' 
+                    'fr': 'Jeux'
                 }
             },
             {
                 'apps': [111, 98, 231],
                 'name': {
                     'en-US': 'Tools',
-                    'fr': 'Outils' 
+                    'fr': 'Outils'
                 }
             }
         ]
@@ -927,6 +881,8 @@ Create
 
     :param apps: a grouped or ungrouped
         :ref:`app list <feed-collections-grouped>`.
+    :param background_image_upload_url: a URL pointing to an image
+    :type background_image_upload_url: string
     :param color: a hex color used in display of the collection. Currently must
         be one of ``#B90000``, ``#FF4E00``, ``#CD6723``, ``#00AACC``,
         ``#5F9B0A``, or ``#2C393B``.
@@ -946,7 +902,8 @@ Create
     .. code-block:: json
 
         {
-            "apps": [984, 19, 345, 981]
+            "apps": [984, 19, 345, 981],
+            "background_image_upload_url": "http://imgur.com/XXX.jpg",
             "color": "#B90000",
             "description": {
                 "en-US": "A description of my collection."
@@ -983,6 +940,8 @@ Update
         :ref:`app list <feed-collections-grouped>`. If included in PATCH
         requests, it will delete from the collection all apps not included.
     :type apps: array
+    :param background_image_upload_url: a URL pointing to an image
+    :type background_image_upload_url: string
     :param color: a hex color used in display of the collection. Currently must
         be one of ``#B90000``, ``#FF4E00``, ``#CD6723``, ``#00AACC``,
         ``#5F9B0A``, or ``#2C393B``.
@@ -1004,6 +963,7 @@ Update
         {
             "apps": [912, 42, 112],
             "color": "#B90000"
+            "background_image_upload_url": "http://imgur.com/XXX.jpg",
             "description": {
                 "en-US": "A description of my collection."
             },
@@ -1073,6 +1033,7 @@ Operator shelves are represented thusly:
             "en-US": "A description of my collection."
         },
         "id": 19,
+        "is_published": false,
         "name": {
             "en-US": "My awesome collection"
         },
@@ -1097,6 +1058,8 @@ Operator shelves are represented thusly:
     the operator shelf.
 ``id``
     *int* - the ID of this operator shelf.
+``is_published``
+    *boolean* - whether the shelf is published on a feed in its carrier/region.
 ``name``
     *string* - a :ref:`translated <overview-translations>` name for the
     operator shelf.
@@ -1157,6 +1120,8 @@ Create
         one of ``#B90000``, ``#FF4E00``, ``#CD6723``, ``#00AACC``, ``#5F9B0A``,
         or ``#2C393B``.
     :type background_color: string
+    :param background_image_upload_url: a URL pointing to an image
+    :type background_image_upload_url: string
     :param carrier: the slug of a :ref:`carrier <carriers>`.
     :type carrier: string
     :param description: a :ref:`translated <overview-translations>` description
@@ -1175,6 +1140,7 @@ Create
         {
             "apps": [19, 1, 44],
             "background_color": "#B90000",
+            "background_image_upload_url": "http://imgur.com/XXX.jpg",
             "carrier": "telefonica",
             "description": {
                 "en-US": "A list of Telefonica's Favorite apps."
@@ -1211,6 +1177,8 @@ Update
         one of ``#B90000``, ``#FF4E00``, ``#CD6723``, ``#00AACC``, ``#5F9B0A``,
         or ``#2C393B``.
     :type background_color: string
+    :param background_image_upload_url: a URL pointing to an image
+    :type background_image_upload_url: string
     :param carrier: the slug of a :ref:`carrier <carriers>`.
     :type carrier: string
     :param description: a :ref:`translated <overview-translations>` description
@@ -1229,6 +1197,7 @@ Update
         {
             "apps": [19, 1, 44],
             "background_color": "#B90000",
+            "background_image_upload_url": "http://imgur.com/XXX.jpg",
             "carrier": "telefonica",
             "description": {
                 "en-US": "A list of Telefonica's Favorite apps."
@@ -1288,3 +1257,107 @@ shelf.
 .. http:delete:: /api/v2/feed/shelves/(int:id|string:slug)/image/
 
     Delete the image for an operator shelf.
+
+
+-------
+Builder
+-------
+
+.. http:put:: /api/v2/feed/builder/
+
+    Sets feeds by region. For each region passed in, the builder
+    will delete all of the carrier-less :ref:`feed items <feed-items>` for
+    that region and then batch create feed items in the order that feed
+    element IDs are passed in for that region.
+
+    **Request**
+
+    .. code-block:: json
+
+        {
+            'us': [
+                ['collection', 52],
+                ['app', 36],
+                ['brand, 123],
+                ['app', 66]
+            ],
+            'cn': [
+                ['app', 36],
+                ['collection', 52],
+                ['brand', 2313]
+                ['brand, 123],
+            ],
+            'hu': [],  // Passing in an empty array will empty that feed.
+        }
+
+    - The keys of the request are region slugs.
+    - The region slugs point to two-element arrays.
+    - The first element of the array is the item type. It can be
+        ``app``, ``collection``, or ``brand``.
+    - The second element of the array is the ID of a feed element.
+    - It can be the ID of a :ref:`FeedApp  <feed-apps>`, or
+        :ref:`FeedBrand <feed-brands>`.
+    - Order matters.
+
+    **Response**
+
+    :status 201: success.
+    :status 400: bad request.
+    :status 403: not authorized.
+
+
+.. _feed-search:
+
+-------------------
+Feed Element Search
+-------------------
+
+.. http:get:: /api/v2/feed/elements/search?q=(str:q)
+
+    Search for feed elements given a search parameter.
+
+    **Request**
+
+    :param q: searches names and slugs
+    :type q: str
+
+
+    **Response**
+
+    :param apps: :ref:`feed apps <feed-apps>`
+    :type apps: array
+    :param brands: :ref:`feed brands <feed-brands>`
+    :type brands: array
+    :param collections: :ref:`feed collections <feed-collections>`
+    :type collections: array
+    :param shelves: :ref:`feed shelves <feed-shelves>`
+    :type shelves: array
+
+    .. code-block:: json
+
+        {
+            "apps": [
+                {
+                    "id": 343,
+                    ...
+                },
+            ],
+            "brands": [
+                {
+                    "id": 143,
+                    ...
+                },
+            ],
+            "collections": [
+                {
+                    "id": 543,
+                    ...
+                },
+            ],
+            "shelves": [
+                {
+                    "id": 643,
+                    ...
+                },
+            ],
+        }

@@ -23,16 +23,14 @@ from amo.decorators import use_master
 from amo.models import SlugField
 
 import mkt.carriers
-import mkt.feed.constants as feed
 import mkt.regions
 from mkt.collections.fields import ColorField
 from mkt.constants.categories import CATEGORY_CHOICES
 from mkt.feed import indexers
 from mkt.ratings.validators import validate_rating
-from mkt.search.indexers import index
+from mkt.translations.fields import PurifiedField, save_signal
 from mkt.webapps.models import Addon, clean_slug, Preview, Webapp
 from mkt.webapps.tasks import index_webapps
-from mkt.translations.fields import PurifiedField, save_signal
 
 from .constants import (BRAND_LAYOUT_CHOICES, BRAND_TYPE_CHOICES,
                         COLLECTION_TYPE_CHOICES,
@@ -332,6 +330,10 @@ class FeedShelf(BaseFeedCollection, BaseFeedImage):
                             str(self.pk / 1000),
                             'feed_shelf_%s.png' % (self.pk,))
 
+    @property
+    def is_published(self):
+        return self.feeditem_set.exists()
+
 
 class FeedApp(BaseFeedImage, amo.models.ModelBase):
     """
@@ -422,7 +424,22 @@ class FeedItem(amo.models.ModelBase):
 @receiver(models.signals.post_save, sender=FeedItem,
           dispatch_uid='feeditem.search.index')
 def update_search_index(sender, instance, **kw):
-    index.delay([instance.id], instance.get_indexer())
+    instance.get_indexer().index_ids([instance.id])
+
+
+# Delete ElasticSearch index on delete.
+@receiver(models.signals.post_delete, sender=FeedApp,
+          dispatch_uid='feedapp.search.unindex')
+@receiver(models.signals.post_delete, sender=FeedBrand,
+          dispatch_uid='feedbrand.search.unindex')
+@receiver(models.signals.post_delete, sender=FeedCollection,
+          dispatch_uid='feedcollection.search.unindex')
+@receiver(models.signals.post_delete, sender=FeedShelf,
+          dispatch_uid='feedshelf.search.unindex')
+@receiver(models.signals.post_delete, sender=FeedItem,
+          dispatch_uid='feeditem.search.unindex')
+def delete_search_index(sender, instance, **kw):
+    instance.get_indexer().unindex(instance.id)
 
 
 # Save translations when saving instance with translated fields.

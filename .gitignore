@@ -2,12 +2,14 @@ settings_local.py*
 settings_local_*.py
 shellng_local.py
 *.py[co]
-*.sw[po]
+*.sw[pon]
 .coverage
 .vagrant
 pip-log.txt
+docs/_build
 docs/_gh-pages
 docs/api/_build
+dreadnot-stage.ini
 lib/product_json/.gitignore
 lib/product_json/*.json
 lib/product_json/.last_update
@@ -31,6 +33,7 @@ vendor
 .nose*
 tmp/*
 tags
+tagz.py
 vagrantconfig_local.yaml
 vagrant/manifests/classes/custom.pp
 node_modules

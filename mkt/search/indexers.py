@@ -6,28 +6,26 @@ from django.conf import settings
 import elasticsearch
 from celeryutils import task
 from elasticsearch import helpers
-from elasticutils.contrib.django import Indexable, MappingType
+from elasticsearch_dsl import Search
 
 import amo
 from amo.decorators import write
 from lib.es.models import Reindexing
 from lib.post_request_task.task import task as post_request_task
-from mkt.search.utils import S
 
 
 task_log = logging.getLogger('z.task')
 
 
-class BaseIndexer(MappingType, Indexable):
+class BaseIndexer(object):
     """
     A class inheriting from BaseIndexer should implement:
 
     - get_model(cls)
     - get_mapping(cls)
-    - extract_document(cls, obj_id, obj=None)
+    - extract_document(cls, pk=None, obj=None)
 
     """
-
     _es = {}
 
     @classmethod
@@ -67,10 +65,7 @@ class BaseIndexer(MappingType, Indexable):
 
     @classmethod
     def index(cls, document, id_=None, es=None, index=None):
-        """
-        We override elasticutil's index because we're using the official
-        elasticsearch client library.
-        """
+        """Index one document."""
         es = es or cls.get_es()
         index = index or cls.get_index()
         es.index(index=index, doc_type=cls.get_mapping_type_name(),
@@ -78,10 +73,7 @@ class BaseIndexer(MappingType, Indexable):
 
     @classmethod
     def bulk_index(cls, documents, id_field='id', es=None, index=None):
-        """
-        We override elasticutil's bulk_index because we're using the official
-        elasticsearch client library.
-        """
+        """Index of a bunch of documents."""
         es = es or cls.get_es()
         index = index or cls.get_index()
         type = cls.get_mapping_type_name()
@@ -93,19 +85,50 @@ class BaseIndexer(MappingType, Indexable):
         helpers.bulk(es, actions)
 
     @classmethod
+    def index_ids(cls, ids, no_delay=False):
+        """
+        Start task to index instances of indexer class matching the IDs.
+        Calls the helper method outside this BaseIndexer class.
+        """
+        if no_delay:
+            index(ids, cls)
+        else:
+            index.delay(ids, cls)
+
+    @classmethod
+    def unindex(cls, id_, es=None, index=None):
+        """
+        Remove a document from the index.
+        """
+        es = es or cls.get_es()
+        index = index or cls.get_index()
+        es.delete(index=index, doc_type=cls.get_mapping_type_name(), id=id_)
+
+    @classmethod
+    def refresh_index(cls, es=None, index=None):
+        """
+        Refresh the index.
+        """
+        es = es or cls.get_es()
+        index = index or cls.get_index()
+        es.indices.refresh(index=index)
+
+    @classmethod
+    def search(cls, using=None):
+        """
+        Returns a `Search` object from elasticsearch_dsl.
+        """
+        return Search(using=using or cls.get_es(),
+                      index=cls.get_index(),
+                      doc_type=cls.get_mapping_type_name())
+
+    @classmethod
     def get_index(cls):
         return settings.ES_INDEXES[cls.get_mapping_type_name()]
 
     @classmethod
     def get_mapping_type_name(cls):
         return cls.get_model()._meta.db_table
-
-    @classmethod
-    def search(cls):
-        """
-        Returns an elasticutils `S` object to start chaining search methods on.
-        """
-        return S(cls)
 
     @classmethod
     def get_settings(cls, settings_override=None):
@@ -184,6 +207,11 @@ class BaseIndexer(MappingType, Indexable):
         }
 
     @classmethod
+    def get_not_analyzed(cls):
+        """Returns {'type': 'string', 'index': 'not_analyzed'} as shorthand."""
+        return {'type': 'string', 'index': 'not_analyzed'}
+
+    @classmethod
     def setup_mapping(cls):
         """Creates the ES index/mapping."""
         cls.get_es().indices.create(
@@ -192,6 +220,7 @@ class BaseIndexer(MappingType, Indexable):
 
     @classmethod
     def get_indexable(cls):
+        """Returns base queryset that is able to be indexed."""
         return cls.get_model().objects.order_by('-id')
 
     @classmethod
@@ -228,7 +257,7 @@ class BaseIndexer(MappingType, Indexable):
             for idx in indices:
                 try:
                     cls.unindex(id_=id_, es=es, index=idx)
-                except elasticsearch.ElasticHttpNotFoundError:
+                except elasticsearch.exceptions.NotFoundError:
                     # Ignore if it's not there.
                     task_log.info(u'[%s:%s] object not found in index' %
                                   (cls.get_model()._meta.model_name, id_))

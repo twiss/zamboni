@@ -30,7 +30,8 @@ from mkt.webpay.forms import FailureForm, PrepareInAppForm, PrepareWebAppForm
 from mkt.webpay.models import ProductIcon
 from mkt.webpay.serializers import ProductIconSerializer
 from mkt.webpay.webpay_jwt import (get_product_jwt, InAppProduct,
-                                   sign_webpay_jwt, WebAppProduct)
+                                   sign_webpay_jwt, SimulatedInAppProduct,
+                                   WebAppProduct)
 
 from . import tasks
 
@@ -58,7 +59,7 @@ class PreparePayWebAppView(CORSMixin, MarketplaceView, GenericAPIView):
             return Response('Payments are limited and flag not enabled',
                             status=status.HTTP_403_FORBIDDEN)
 
-        if app.is_premium() and app.has_purchased(request._request.amo_user):
+        if app.is_premium() and app.has_purchased(request._request.user):
             log.info('Already purchased: {0}'.format(app.pk))
             return Response({'reason': u'Already purchased app.'},
                             status=status.HTTP_409_CONFLICT)
@@ -67,7 +68,7 @@ class PreparePayWebAppView(CORSMixin, MarketplaceView, GenericAPIView):
                         'Preparing JWT for: {0}'.format(app.pk), severity=3)
 
         log.debug('Starting purchase of app: {0} by user: {1}'.format(
-            app.pk, request._request.amo_user))
+            app.pk, request._request.user))
 
         contribution = Contribution.objects.create(
             addon_id=app.pk,
@@ -77,7 +78,7 @@ class PreparePayWebAppView(CORSMixin, MarketplaceView, GenericAPIView):
             source=request._request.REQUEST.get('src', ''),
             source_locale=request._request.LANG,
             type=amo.CONTRIB_PENDING,
-            user=request._request.amo_user,
+            user=request._request.user,
             uuid=str(uuid.uuid4()),
         )
 
@@ -117,7 +118,7 @@ class PreparePayInAppView(CORSMixin, MarketplaceView, GenericAPIView):
         log.debug('Starting purchase of in app: {0}'.format(inapp.pk))
 
         contribution = Contribution.objects.create(
-            addon_id=inapp.webapp.pk,
+            addon_id=inapp.webapp and inapp.webapp.pk,
             inapp_product=inapp,
             # In-App payments are unauthenticated so we have no user
             # and therefore can't determine a meaningful region.
@@ -131,9 +132,16 @@ class PreparePayInAppView(CORSMixin, MarketplaceView, GenericAPIView):
             uuid=str(uuid.uuid4()),
         )
 
-        log.debug('Storing contrib for uuid: {0}'.format(contribution.uuid))
+        log.info('Storing contrib for uuid: {0}'.format(contribution.uuid))
 
-        token = get_product_jwt(InAppProduct(inapp), contribution)
+        if inapp.simulate:
+            log.info('Preparing in-app JWT simulation for {i}'
+                     .format(i=inapp))
+            product = SimulatedInAppProduct(inapp)
+        else:
+            log.info('Preparing in-app JWT for {i}'.format(i=inapp))
+            product = InAppProduct(inapp)
+        token = get_product_jwt(product, contribution)
 
         return Response(token, status=status.HTTP_201_CREATED)
 

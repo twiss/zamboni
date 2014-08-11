@@ -9,6 +9,12 @@
 })(require);
 
 $(document).ready(function() {
+
+    // Show daily message if it hasn't been seen yet
+    if ($('.daily-message').length) {
+        initDailyMessage();
+    }
+
     // Edit Add-on
     if (document.getElementById('edit-addon')) {
         initEditAddon();
@@ -29,6 +35,10 @@ $(document).ready(function() {
     //Payments
     if ($('.payments').length) {
         initPayments();
+    }
+
+    if ($('#submit-api').length) {
+        initAPI();
     }
 
     // Submission process
@@ -901,6 +911,21 @@ function generateErrorList(o) {
 }
 
 
+function initAPI() {
+    // As the "Client type" changes, alter the form.
+    var leg = $('#id_oauth_leg');
+    var update = function update() {
+      if (leg.val() === 'command') {
+        $('tr.api-oauth-website').hide();
+      } else {
+        $('tr.api-oauth-website').show();
+      }
+    };
+    leg.on('change', update);
+    update();
+}
+
+
 function initPayments(delegate) {
   var $delegate = $(delegate || document.body);
     if (z.noEdit) return;
@@ -1308,6 +1333,28 @@ function hideSameSizedIcons() {
     //     }
     //     icon_sizes.push(size);
     // });
+}
+
+function initDailyMessage() {
+    var motd = $('.daily-message');
+    if (!motd.length || $('#editor-motd').length) {
+        // We don't show the message on the page where we edit the message
+        // so no point in adding the close button or handler.
+        // Nor, of course, if we don't have a daily-message on the page.
+        return;
+    }
+    var storage = z.Storage();
+    var messageText = $('p', motd).text();
+    var messageType = motd.data('message-type');
+    var messageKey = 'motd_closed_' + messageType;
+    motd.find('.close').show().click(_pd(function(e) {
+        storage.set(messageKey, messageText);
+        motd.slideUp();
+    }));
+    if (storage.get(messageKey) !== messageText) {
+        // You haven't read this spam yet? Here, I have something to show you.
+        motd.slideDown();
+    }
 }
 
 

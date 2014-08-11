@@ -173,7 +173,7 @@ class TestAppDetailsBasicForm(amo.tests.TestCase):
 
     def setUp(self):
         self.request = mock.Mock()
-        self.request.amo_user = UserProfile.objects.get(id=999)
+        self.request.user = UserProfile.objects.get(id=999)
 
     def test_slug(self):
         app = Webapp.objects.get(pk=337141)
@@ -191,7 +191,6 @@ class TestAppDetailsBasicForm(amo.tests.TestCase):
         eq_(app.app_slug, 'thisisaslug')
 
     def test_comm_thread(self):
-        self.create_switch('comm-dashboard')
         app = Webapp.objects.get(pk=337141)
         note_body = 'please approve this app'
         data = {

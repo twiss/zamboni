@@ -8,7 +8,7 @@ from rest_framework import status
 import amo.tests
 from mkt.users.models import UserProfile
 
-from mkt.api.tests.test_oauth import RestOAuthClient
+from mkt.api.tests.test_oauth import JSONClient, RestOAuthClient
 from mkt.api.models import Access, generate
 from mkt.inapp.models import InAppProduct
 from mkt.site.fixtures import fixture
@@ -17,8 +17,11 @@ from mkt.prices.models import Price
 
 
 class BaseInAppProductViewSetTests(amo.tests.TestCase):
+
     def setUp(self):
         self.webapp = Webapp.objects.get(pk=337141)
+        self.webapp.update(app_domain='app://rad-app.com',
+                           is_packaged=True)
         price = Price.objects.all()[0]
         self.valid_in_app_product_data = {
             'name': 'Purple Gems',
@@ -33,12 +36,12 @@ class BaseInAppProductViewSetTests(amo.tests.TestCase):
 
     def list_url(self):
         return reverse('in-app-products-list',
-                       kwargs={'app_slug': self.webapp.app_slug})
+                       kwargs={'origin': self.webapp.origin})
 
     def detail_url(self, pk):
-        app_slug = self.webapp.app_slug
         return reverse('in-app-products-detail',
-                       kwargs={'app_slug': app_slug, 'pk': pk})
+                       kwargs={'origin': self.webapp.origin,
+                               'pk': pk})
 
     def create_product(self):
         product_data = {'webapp': self.webapp}
@@ -82,20 +85,6 @@ class TestInAppProductViewSetAuthorized(BaseInAppProductViewSetTests):
         eq_(response.json['name'], 'Orange Gems')
         eq_(response.json['name'], product.reload().name)
 
-    def test_list(self):
-        product1 = self.create_product()
-        product2 = self.create_product()
-        response = self.get(self.list_url())
-        eq_(response.status_code, status.HTTP_200_OK)
-        eq_(sorted([p['id'] for p in response.json['objects']]),
-            [product1.id, product2.id])
-
-    def test_detail(self):
-        product = self.create_product()
-        response = self.get(self.detail_url(product.id))
-        eq_(response.status_code, status.HTTP_200_OK)
-        eq_(response.json['id'], product.id)
-
     def test_delete(self):
         product = self.create_product()
         delete_response = self.delete(self.detail_url(product.id))
@@ -123,14 +112,18 @@ class TestInAppProductViewSetUnauthorized(BaseInAppProductViewSetTests):
         eq_(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_list(self):
-        self.create_product()
+        product1 = self.create_product()
+        product2 = self.create_product()
         response = self.get(self.list_url())
-        eq_(response.status_code, status.HTTP_403_FORBIDDEN)
+        eq_(response.status_code, status.HTTP_200_OK)
+        eq_(sorted([p['id'] for p in response.json['objects']]),
+            [product1.id, product2.id])
 
     def test_detail(self):
         product = self.create_product()
         response = self.get(self.detail_url(product.id))
-        eq_(response.status_code, status.HTTP_403_FORBIDDEN)
+        eq_(response.status_code, status.HTTP_200_OK)
+        eq_(response.json['id'], product.id)
 
     def test_delete(self):
         product = self.create_product()
@@ -158,17 +151,43 @@ class TestInAppProductViewSetAuthorizedCookie(BaseInAppProductViewSetTests):
                             self.valid_in_app_product_data)
         eq_(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_list(self):
-        self.create_product()
-        response = self.get(self.list_url())
-        eq_(response.status_code, status.HTTP_403_FORBIDDEN)
-
-    def test_detail(self):
-        product = self.create_product()
-        response = self.get(self.detail_url(product.id))
-        eq_(response.status_code, status.HTTP_403_FORBIDDEN)
-
     def test_delete(self):
         product = self.create_product()
         response = self.delete(self.detail_url(product.id))
         eq_(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class TestStubInAppProductViewSet(BaseInAppProductViewSetTests):
+    fixtures = fixture('user_999', 'webapp_337141', 'prices2')
+
+    def setUp(self):
+        super(TestStubInAppProductViewSet, self).setUp()
+        self.client = JSONClient()
+
+    def list_url(self):
+        return reverse('stub-in-app-products-list')
+
+    def objects(self, res):
+        return sorted(res.json['objects'], key=lambda d: d['name'])
+
+    def test_get_when_stubs_dont_exist(self):
+        res = self.get(self.list_url())
+        eq_(res.status_code, status.HTTP_200_OK)
+        objects = self.objects(res)
+        eq_(objects[0]['name'], 'Kiwi')
+        eq_(objects[0]['price_id'], 1)
+        eq_(objects[1]['name'], 'Unicorn')
+        eq_(objects[1]['price_id'], 2)
+
+    def test_get_existing_stubs(self):
+        stub = InAppProduct.objects.create(stub=True,
+                                           name='Test Product',
+                                           price=Price.objects.all()[0])
+
+        res = self.get(self.list_url())
+        eq_(res.status_code, status.HTTP_200_OK)
+        objects = self.objects(res)
+        eq_(objects[0]['name'], stub.name)
+        eq_(objects[0]['price_id'], stub.price.pk)
+        eq_(InAppProduct.objects.all().count(), 1,
+            'No new stubs should have been created')

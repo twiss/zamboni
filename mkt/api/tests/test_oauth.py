@@ -1,23 +1,23 @@
-import json
 import urllib
 import urlparse
 from datetime import datetime
 from functools import partial
 
 from django.conf import settings
+from django.contrib.auth.models import AnonymousUser
 from django.core.urlresolvers import reverse
 from django.test.client import FakePayload
 from django.utils.encoding import iri_to_uri, smart_str
 
 from django_browserid.tests import mock_browserid
-from nose.tools import eq_
+from nose.tools import eq_, ok_
 from oauthlib import oauth1
 from pyquery import PyQuery as pq
 from rest_framework.request import Request
 from test_utils import RequestFactory
 
 from amo.helpers import absolutify, urlparams
-from amo.tests import TestCase, TestClient
+from amo.tests import JSONClient, TestCase
 from mkt.api import authentication
 from mkt.api.middleware import RestOAuthMiddleware
 from mkt.api.models import Access, ACCESS_TOKEN, generate, REQUEST_TOKEN, Token
@@ -37,21 +37,7 @@ def get_absolute_url(url, api_name='apps', absolute=True):
     return res
 
 
-def wrap(response):
-    """Wrapper around responses to add additional info."""
-    def _json(self):
-        """Will return parsed JSON on response if there is any."""
-        if self.content and 'application/json' in self['Content-Type']:
-            if not hasattr(self, '_content_json'):
-                self._content_json = json.loads(self.content)
-            return self._content_json
-
-    if not hasattr(response.__class__, 'json'):
-        response.__class__.json = property(_json)
-    return response
-
-
-class OAuthClient(TestClient):
+class OAuthClient(JSONClient):
     """
     OAuthClient can do all the requests the Django test client,
     but even more. And it can magically sign requests.
@@ -97,8 +83,7 @@ class OAuthClient(TestClient):
             urlstring = '?'.join([urlstring,
                                   urllib.urlencode(data, doseq=True)])
         url, headers, _ = self.sign('GET', urlstring)
-        return wrap(super(OAuthClient, self)
-                    .get(url, **self.kw(headers, **kw)))
+        return super(OAuthClient, self).get(url, **self.kw(headers, **kw))
 
     def delete(self, url, data={}, **kw):
         if isinstance(url, tuple) and len(url) > 2 and data:
@@ -109,20 +94,19 @@ class OAuthClient(TestClient):
             urlstring = '?'.join([urlstring,
                                   urllib.urlencode(data, doseq=True)])
         url, headers, _ = self.sign('DELETE', urlstring)
-        return wrap(super(OAuthClient, self)
-                    .delete(url, **self.kw(headers, **kw)))
+        return super(OAuthClient, self).delete(url, **self.kw(headers, **kw))
 
     def post(self, url, data='', content_type='application/json', **kw):
         url, headers, _ = self.sign('POST', self.get_absolute_url(url))
-        return wrap(super(OAuthClient, self).post(url, data=data,
-                    content_type=content_type,
-                    **self.kw(headers, **kw)))
+        return super(OAuthClient, self).post(
+            url, data=data, content_type=content_type,
+            **self.kw(headers, **kw))
 
     def put(self, url, data='', content_type='application/json', **kw):
         url, headers, body = self.sign('PUT', self.get_absolute_url(url))
-        return wrap(super(OAuthClient, self).put(url, data=data,
-                    content_type=content_type,
-                    **self.kw(headers, **kw)))
+        return super(OAuthClient, self).put(
+            url, data=data, content_type=content_type,
+            **self.kw(headers, **kw))
 
     def patch(self, url, data='', **kw):
         url, headers, body = self.sign('PATCH', self.get_absolute_url(url))
@@ -139,7 +123,7 @@ class OAuthClient(TestClient):
 
     def options(self, url):
         url, headers, body = self.sign('OPTIONS', self.get_absolute_url(url))
-        return wrap(super(OAuthClient, self).options(url, **self.kw(headers)))
+        return super(OAuthClient, self).options(url, **self.kw(headers))
 
 
 class BaseOAuth(BaseAPI):
@@ -215,8 +199,10 @@ class Test3LeggedOAuthFlow(TestCase):
             url, HTTP_HOST='testserver',
             HTTP_AUTHORIZATION=auth_header)
         req.API = True
+        req.user = AnonymousUser()
         RestOAuthMiddleware().process_request(req)
-        assert auth.authenticate(Request(req))
+        ok_(auth.authenticate(Request(req)))
+        ok_(req.user.is_authenticated())
         eq_(req.user, self.user2)
 
     def test_bad_access_token(self):
@@ -231,8 +217,10 @@ class Test3LeggedOAuthFlow(TestCase):
             url, HTTP_HOST='testserver',
             HTTP_AUTHORIZATION=auth_header)
         req.API = True
+        req.user = AnonymousUser()
         RestOAuthMiddleware().process_request(req)
-        assert not auth.authenticate(Request(req))
+        ok_(not auth.authenticate(Request(req)))
+        ok_(not req.user.is_authenticated())
 
     def test_get_authorize_page(self):
         t = Token.generate_new(REQUEST_TOKEN, self.access)
@@ -367,8 +355,10 @@ class Test2LeggedOAuthFlow(TestCase):
             url, HTTP_HOST='testserver',
             HTTP_AUTHORIZATION=auth_header)
         req.API = True
+        req.user = AnonymousUser()
         RestOAuthMiddleware().process_request(req)
-        assert auth.authenticate(Request(req))
+        ok_(auth.authenticate(Request(req)))
+        ok_(req.user.is_authenticated())
         eq_(req.user, self.user)
 
     def test_fail(self):
@@ -381,6 +371,7 @@ class Test2LeggedOAuthFlow(TestCase):
             url, HTTP_HOST='testserver',
             HTTP_AUTHORIZATION=auth_header)
         req.API = True
+        req.user = AnonymousUser()
         RestOAuthMiddleware().process_request(req)
-        assert not auth.authenticate(Request(req))
-        assert not hasattr(req, 'user')
+        ok_(not auth.authenticate(Request(req)))
+        ok_(not req.user.is_authenticated())

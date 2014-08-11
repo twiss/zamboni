@@ -3,12 +3,9 @@
   <ul>
     <li>
       <a href="/settings">
-        <em>{{ request.amo_user.email }}</em>
+        <em>{{ request.user.email }}</em>
         {{ _('Edit Account Settings') }}</a>
     </li>
-    {% if amo_user.is_developer %}
-      <li><a href="{{ url('mkt.developers.apps') }}">{{ _('My Submissions') }}</a></li>
-    {% endif %}
     {% if in_devhub %}
       <li><a href="{{ url('home') }}">{{ _('Return to the Marketplace') }}</a></li>
     {% endif %}

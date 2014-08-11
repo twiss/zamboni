@@ -125,7 +125,6 @@ class TestVersion(amo.tests.TestCase):
         self.assert3xx(r, self.webapp.get_dev_url('versions'))
 
     def test_comm_thread_after_resubmission(self):
-        self.create_switch('comm-dashboard')
         self.webapp.update(status=amo.STATUS_REJECTED)
         amo.tests.make_rated(self.webapp)
         amo.set_user(UserProfile.objects.get(username='admin'))
@@ -387,6 +386,17 @@ class TestVersionPackaged(amo.tests.WebappTestCase):
         # Test that the status of the "deleted" version is STATUS_DELETED.
         eq_(str(version[0].status[0]),
             str(amo.MKT_STATUS_CHOICES[amo.STATUS_DELETED]))
+
+    def test_delete_version_while_disabled(self):
+        self.app.update(disabled_by_user=True)
+        version = self.app.latest_version
+
+        res = self.client.post(self.delete_url, {'version_id': version.pk})
+        eq_(res.status_code, 302)
+
+        eq_(self.get_app().status, amo.STATUS_NULL)
+        version = Version.with_deleted.get(pk=version.pk)
+        assert version.deleted
 
     def test_anonymous_delete_redirects(self):
         self.client.logout()

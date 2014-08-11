@@ -52,7 +52,7 @@ class TestFeedAppIndexer(FeedTestMixin, BaseFeedIndexerTest,
         eq_(doc['app'], self.app.id)
         eq_(doc['background_color'], '#DDDDDD')
         self._assert_test_l10n(doc['description_translations'])
-        eq_(doc['has_image'], True)
+        eq_(doc['image_hash'], 'LOL')
         eq_(doc['item_type'], feed.FEED_TYPE_APP)
         eq_(doc['preview'], {'id': self.obj.preview.id,
                              'thumbnail_size': [50, 50],
@@ -76,11 +76,11 @@ class TestFeedBrandIndexer(FeedTestMixin, BaseFeedIndexerTest,
     def test_extract(self):
         doc = self._get_doc()
         eq_(doc['id'], self.obj.id)
-        eq_(doc['slug'], self.obj.slug)
-        eq_(doc['type'], self.obj.type)
-
         eq_(doc['apps'], list(self.obj.apps().values_list('id', flat=True)))
         eq_(doc['item_type'], feed.FEED_TYPE_BRAND)
+        eq_(doc['layout'], self.obj.layout)
+        eq_(doc['slug'], self.obj.slug)
+        eq_(doc['type'], self.obj.type)
 
 
 class TestFeedCollectionIndexer(FeedTestMixin, BaseFeedIndexerTest,
@@ -108,7 +108,7 @@ class TestFeedCollectionIndexer(FeedTestMixin, BaseFeedIndexerTest,
                                       'string': 'first-group'}]},
              {'group_translations': [{'lang': 'en-US',
                                       'string': 'second-group'}]}])
-        eq_(doc['has_image'], True)
+        eq_(doc['image_hash'], 'LOL')
         eq_(doc['item_type'], feed.FEED_TYPE_COLL)
         self._assert_test_l10n(doc['name_translations'])
         assert self.obj.name.localized_string in doc['search_names']
@@ -135,7 +135,7 @@ class TestFeedShelfIndexer(FeedTestMixin, BaseFeedIndexerTest,
         eq_(doc['carrier'],
             mkt.carriers.CARRIER_CHOICE_DICT[self.obj.carrier].slug)
         self._assert_test_l10n(doc['description_translations'])
-        eq_(doc['has_image'], True)
+        eq_(doc['image_hash'], 'LOL')
         self._assert_test_l10n(doc['name_translations'])
         eq_(doc['region'],
             mkt.regions.REGIONS_CHOICES_ID_DICT[self.obj.region].slug)
@@ -146,17 +146,19 @@ class TestFeedShelfIndexer(FeedTestMixin, BaseFeedIndexerTest,
 class TestFeedItemIndexer(FeedTestMixin, BaseFeedIndexerTest,
                           amo.tests.TestCase):
 
-     def setUp(self):
-        self.obj = self.feed_item_factory(item_type=feed.FEED_TYPE_APP)
+    def setUp(self):
+        self.obj = self.feed_item_factory(item_type=feed.FEED_TYPE_APP,
+                                          order=5)
         self.indexer = self.obj.get_indexer()()
         self.model = FeedItem
 
-     def test_extract(self):
+    def test_extract(self):
         doc = self._get_doc()
         eq_(doc['id'], self.obj.id)
         eq_(doc['carrier'], self.obj.carrier)
         eq_(doc['category'], None)
         eq_(doc['item_type'], feed.FEED_TYPE_APP)
+        eq_(doc['order'], self.obj.order + 1)
         eq_(doc['region'], self.obj.region)
         eq_(doc['app'], self.obj.app_id)
         eq_(doc['brand'], None)

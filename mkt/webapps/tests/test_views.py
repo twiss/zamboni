@@ -1,19 +1,20 @@
+from django.contrib.auth.models import AnonymousUser
 from django.core.urlresolvers import reverse
 
 from nose.tools import eq_, ok_
 from test_utils import RequestFactory
 
 import amo.tests
-from constants.payments import PROVIDER_BANGO, PROVIDER_REFERENCE
 from mkt.api.tests.test_oauth import BaseOAuth
 from mkt.constants import APP_FEATURES
+from mkt.constants.payments import PROVIDER_BANGO, PROVIDER_REFERENCE
 from mkt.developers.models import (AddonPaymentAccount, PaymentAccount,
                                    SolitudeSeller)
 from mkt.site.fixtures import fixture
+from mkt.users.models import UserProfile
 from mkt.webapps.models import Webapp
 from mkt.webapps.serializers import (AppSerializer, AppFeaturesSerializer,
                                      SimpleAppSerializer)
-from mkt.users.models import UserProfile
 
 
 class TestAppFeaturesSerializer(BaseOAuth):
@@ -22,6 +23,7 @@ class TestAppFeaturesSerializer(BaseOAuth):
     def setUp(self):
         self.features = Webapp.objects.get(pk=337141).latest_version.features
         self.request = RequestFactory().get('/')
+        self.request.user = AnonymousUser()
 
     def get_native(self, **kwargs):
         self.features.update(**kwargs)
@@ -48,6 +50,7 @@ class TestSimpleAppSerializer(amo.tests.TestCase):
     def setUp(self):
         self.webapp = Webapp.objects.get(pk=337141)
         self.request = RequestFactory().get('/')
+        self.request.user = AnonymousUser()
 
     def app(self):
         return AppSerializer(self.webapp,

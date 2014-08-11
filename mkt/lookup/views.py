@@ -12,7 +12,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 import commonware.log
 from babel import numbers
-from elasticutils.contrib.django import S
+from elasticsearch_dsl import Q as ES_Q, query
 from slumber.exceptions import HttpClientError, HttpServerError
 from tower import ugettext as _
 
@@ -26,7 +26,8 @@ from mkt.access import acl
 from mkt.account.utils import purchase_list
 from mkt.comm.utils import create_comm_note
 from mkt.constants import comm
-from mkt.constants.payments import COMPLETED, FAILED, PENDING, REFUND_STATUSES
+from mkt.constants.payments import (COMPLETED, FAILED, PENDING,
+                                    SOLITUDE_REFUND_STATUSES)
 from mkt.developers.models import ActivityLog, AddonPaymentAccount
 from mkt.developers.providers import get_provider
 from mkt.developers.views_payments import _redirect_to_bango_portal
@@ -106,7 +107,7 @@ def user_delete(request, user_id):
     user.save()  # Must call the save function to delete user.
     amo.log(amo.LOG.DELETE_USER_LOOKUP, user,
             details={'reason': delete_form.cleaned_data['delete_reason']},
-            user=request.amo_user)
+            user=request.user)
 
     return HttpResponseRedirect(reverse('lookup.user_summary', args=[user_id]))
 
@@ -137,8 +138,9 @@ def _transaction_summary(tx_uuid):
     refund_status = None
     if refund_contrib and refund_contrib.refund.status == amo.REFUND_PENDING:
         try:
-            refund_status = REFUND_STATUSES[client.api.bango.refund.status.get(
-                data={'uuid': refund_contrib.transaction_id})['status']]
+            status = client.api.bango.refund.status.get(
+                    data={'uuid': refund_contrib.transaction_id})['status']
+            refund_status = SOLITUDE_REFUND_STATUSES[status]
         except HttpServerError:
             refund_status = _('Currently unable to retrieve refund status.')
 
@@ -207,7 +209,7 @@ def transaction_refund(request, tx_uuid):
     if res['status'] == PENDING:
         # Create pending Refund.
         refund_contrib.enqueue_refund(
-            amo.REFUND_PENDING, request.amo_user,
+            amo.REFUND_PENDING, request.user,
             refund_reason=form.cleaned_data['refund_reason'])
         log.info('Refund pending: %s' % tx_uuid)
         email_buyer_refund_pending(contrib)
@@ -216,7 +218,7 @@ def transaction_refund(request, tx_uuid):
     elif res['status'] == COMPLETED:
         # Create approved Refund.
         refund_contrib.enqueue_refund(
-            amo.REFUND_APPROVED, request.amo_user,
+            amo.REFUND_APPROVED, request.user,
             refund_reason=form.cleaned_data['refund_reason'])
         log.info('Refund approved: %s' % tx_uuid)
         email_buyer_refund_approved(contrib)
@@ -240,8 +242,8 @@ def app_summary(request, addon_id):
         app.update(priority_review=True)
         msg = u'Priority Review Requested'
         # Create notes and log entries.
-        create_comm_note(app, app.latest_version, request.amo_user, msg,
-                         note_type=comm.NO_ACTION)
+        create_comm_note(app, app.latest_version, request.user, msg,
+                         note_type=comm.PRIORITY_REVIEW_REQUESTED)
         amo.log(amo.LOG.PRIORITY_REVIEW_REQUESTED, app, app.latest_version,
                 created=datetime.now(), details={'comments': msg})
 
@@ -336,7 +338,7 @@ def user_activity(request, user_id):
         action__in=amo.LOG_HIDE_DEVELOPER)
     admin_items = ActivityLog.objects.for_user(user).filter(
         action__in=amo.LOG_HIDE_DEVELOPER)
-    amo.log(amo.LOG.ADMIN_VIEWED_LOG, request.amo_user, user=user)
+    amo.log(amo.LOG.ADMIN_VIEWED_LOG, request.user, user=user)
     return render(request, 'lookup/user_activity.html',
                   {'pager': products, 'account': user, 'is_admin': is_admin,
                    'listing_filter': listing,
@@ -346,18 +348,16 @@ def user_activity(request, user_id):
 
 
 def _expand_query(q, fields):
-    query = {}
-    rules = [
-        ('term', {'value': q, 'boost': 10}),
-        ('match', {'query': q, 'boost': 4, 'type': 'phrase'}),
-        ('match', {'query': q, 'boost': 3}),
-        ('fuzzy', {'value': q, 'boost': 2, 'prefix_length': 4}),
-        ('startswith', {'value': q, 'boost': 1.5}),
-    ]
-    for k, v in rules:
-        for field in fields:
-            query['%s__%s' % (field, k)] = v
-    return query
+    should = []
+    for field in fields:
+        should.append(ES_Q('term', **{field: {'value': q, 'boost': 10}}))
+        should.append(ES_Q('match', **{field: {'query': q, 'boost': 4,
+                                               'type': 'phrase'}}))
+        should.append(ES_Q('match', **{field: {'query': q, 'boost': 3}}))
+        should.append(ES_Q('fuzzy', **{field: {'value': q, 'boost': 2,
+                                               'prefix_length': 4}}))
+        should.append(ES_Q('prefix', **{field: {'value': q, 'boost': 1.5}}))
+    return query.Bool(should=should)
 
 
 @login_required
@@ -404,35 +404,37 @@ def transaction_search(request):
 def app_search(request):
     results = []
     q = request.GET.get('q', u'').lower().strip()
+    limit = (lkp.MAX_RESULTS if request.GET.get('all_results')
+             else lkp.SEARCH_LIMIT)
     fields = ('name', 'app_slug')
     non_es_fields = ['id', 'name__localized_string'] + list(fields)
+
     if q.isnumeric():
-        qs = (Webapp.objects.filter(pk=q)
-                            .values(*non_es_fields))
+        qs = Webapp.objects.filter(pk=q).values(*non_es_fields)[:limit]
     else:
         # Try to load by GUID:
-        qs = (Webapp.objects.filter(guid=q)
-                            .values(*non_es_fields))
+        qs = Webapp.objects.filter(guid=q).values(*non_es_fields)[:limit]
         if not qs.count():
-            qs = (S(WebappIndexer)
-                  .query(should=True, **_expand_query(q, fields))
-                  .values_dict(*['id'] + list(fields)))
-        qs = _slice_results(request, qs)
+            qs = (WebappIndexer.search()
+                  .query(_expand_query(q, fields))[:limit])
+                  # TODO: Update to `.fields(...)` when the DSL supports it.
+            qs = qs.execute()
     for app in qs:
-        if 'name__localized_string' in app:
+        if isinstance(app, dict):
             # This is a result from the database.
             app['url'] = reverse('lookup.app_summary', args=[app['id']])
             app['name'] = app['name__localized_string']
             results.append(app)
         else:
-            # This is a result from elasticsearch which returns name as a list.
-            app['url'] = reverse('lookup.app_summary', args=[app['id']])
-            for field in ('id', 'app_slug'):
-                app[field] = app.get(field)
-            for name in app['name']:
-                dd = app.copy()
-                dd['name'] = name
-                results.append(dd)
+            # This is a result from elasticsearch which returns `Result`
+            # objects and name as a list, one for each locale.
+            for name in app.name:
+                results.append({
+                    'id': app.id,
+                    'url': reverse('lookup.app_summary', args=[app.id]),
+                    'app_slug': app.get('app_slug'),
+                    'name': name,
+                })
     return {'results': results}
 
 

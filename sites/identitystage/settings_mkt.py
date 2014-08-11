@@ -60,7 +60,7 @@ STATSD_PREFIX = 'marketplace-identity-stage'
 ## Celery
 BROKER_URL = private_mkt.BROKER_URL
 
-CELERY_ALWAYS_EAGER = False
+CELERY_ALWAYS_EAGER = True
 CELERY_IGNORE_RESULT = True
 CELERY_DISABLE_RATE_LIMITS = True
 CELERYD_PREFETCH_MULTIPLIER = 1
@@ -103,7 +103,7 @@ if getattr(private_mkt, 'LOAD_TESTING', False):
     # secrets used for them
     API_PASSWORD = getattr(private_mkt, 'API_PASSWORD', FAKEAUTH_TOKEN)
 AMO_LANGUAGES = AMO_LANGUAGES + ('dbg',)
-LANGUAGES = lazy(lazy_langs, dict)(AMO_LANGUAGES)
+LANGUAGES = lazy(langs, dict)(AMO_LANGUAGES)
 LANGUAGE_URL_MAP = dict([(i.lower(), i) for i in AMO_LANGUAGES])
 
 #Bug 748403

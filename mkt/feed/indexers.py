@@ -2,8 +2,6 @@
 Indexers for FeedApp, FeedBrand, FeedCollection, FeedShelf, FeedItem for
 feed homepage and curation tool search.
 """
-from collections import defaultdict
-
 from amo.utils import attach_trans_dict
 
 import mkt.carriers
@@ -12,6 +10,17 @@ import mkt.regions
 from mkt.search.indexers import BaseIndexer
 from mkt.translations.utils import format_translation_es
 from mkt.webapps.models import Webapp
+
+
+def get_slug_multifield():
+    # TODO: convert to new syntax on ES 1.0+.
+    return {
+        'type': 'multi_field',
+        'fields': {
+            'slug': {'type': 'string'},
+            'raw': {'type': 'string', 'index': 'not_analyzed'},
+        }
+    }
 
 
 class FeedAppIndexer(BaseIndexer):
@@ -31,20 +40,19 @@ class FeedAppIndexer(BaseIndexer):
                 'properties': {
                     'id': {'type': 'long'},
                     'app': {'type': 'long'},
-                    'background_color': {'type': 'string',
-                                         'index': 'not_analyzed'},
-                    'has_image': {'type': 'boolean'},
-                    'item_type': {'type': 'string', 'index': 'not_analyzed'},
+                    'background_color': cls.get_not_analyzed(),
+                    'created': {'type': 'date', 'format': 'dateOptionalTime'},
+                    'image_hash': cls.get_not_analyzed(),
+                    'item_type':  cls.get_not_analyzed(),
                     'preview': {'type': 'object', 'dynamic': 'true'},
-                    'pullquote_attribution': {'type': 'string',
-                                              'index': 'not_analyzed'},
+                    'pullquote_attribution': cls.get_not_analyzed(),
                     'pullquote_rating': {'type': 'short'},
                     'pullquote_text': {'type': 'string',
                                        'analyzer': 'default_icu'},
                     'search_names': {'type': 'string',
                                      'analyzer': 'default_icu'},
-                    'slug': {'type': 'string'},
-                    'type': {'type': 'string', 'index': 'not_analyzed'},
+                    'slug': get_slug_multifield(),
+                    'type': cls.get_not_analyzed(),
                 }
             }
         }
@@ -52,10 +60,10 @@ class FeedAppIndexer(BaseIndexer):
         return cls.attach_translation_mappings(mapping, ('description',))
 
     @classmethod
-    def extract_document(cls, obj_id, obj=None):
+    def extract_document(cls, pk=None, obj=None):
         """Converts this instance into an Elasticsearch document"""
         if obj is None:
-            obj = cls.get_model().get(pk=obj_id)
+            obj = cls.get_model().objects.get(pk=pk)
 
         # Attach translations for searching and indexing.
         attach_trans_dict(cls.get_model(), [obj])
@@ -65,7 +73,8 @@ class FeedAppIndexer(BaseIndexer):
             'id': obj.id,
             'app': obj.app_id,
             'background_color': obj.background_color,
-            'has_image': obj.has_image,
+            'created': obj.created,
+            'image_hash': obj.image_hash,
             'item_type': feed.FEED_TYPE_APP,
             'preview': {'id': obj.preview.id,
                         'thumbnail_size': obj.preview.thumbnail_size,
@@ -102,25 +111,29 @@ class FeedBrandIndexer(BaseIndexer):
                 'properties': {
                     'id': {'type': 'long'},
                     'apps': {'type': 'long'},
-                    'item_type': {'type': 'string', 'index': 'not_analyzed'},
-                    'slug': {'type': 'string'},
+                    'created': {'type': 'date', 'format': 'dateOptionalTime'},
+                    'layout': cls.get_not_analyzed(),
+                    'item_type': cls.get_not_analyzed(),
+                    'slug': get_slug_multifield(),
                     'type': {'type': 'string'},
                 }
             }
         }
 
     @classmethod
-    def extract_document(cls, obj_id, obj=None):
+    def extract_document(cls, pk=None, obj=None):
         if obj is None:
-            obj = cls.get_model().get(pk=obj_id)
+            obj = cls.get_model().objects.get(pk=pk)
 
         return {
             'id': obj.id,
             'apps': list(obj.apps().values_list('id', flat=True)),
+            'created': obj.created,
+            'layout': obj.layout,
             'item_type': feed.FEED_TYPE_BRAND,
-        'slug': obj.slug,
-        'type': obj.type,
-    }
+            'slug': obj.slug,
+            'type': obj.type,
+        }
 
 
 class FeedCollectionIndexer(BaseIndexer):
@@ -138,14 +151,16 @@ class FeedCollectionIndexer(BaseIndexer):
                 'properties': {
                     'id': {'type': 'long'},
                     'apps': {'type': 'long'},
+                    'created': {'type': 'date', 'format': 'dateOptionalTime'},
+                    'background_color': cls.get_not_analyzed(),
                     'group_apps': {'type': 'object', 'dynamic': 'true'},
                     'group_names': {'type': 'object', 'dynamic': 'true'},
-                    'has_image': {'type': 'boolean'},
-                    'item_type': {'type': 'string', 'index': 'not_analyzed'},
+                    'image_hash': cls.get_not_analyzed(),
+                    'item_type': cls.get_not_analyzed(),
                     'search_names': {'type': 'string',
                                      'analyzer': 'default_icu'},
-                    'slug': {'type': 'string'},
-                    'type': {'type': 'string', 'index': 'not_analyzed'},
+                    'slug': get_slug_multifield(),
+                    'type': cls.get_not_analyzed(),
                 }
             }
         }
@@ -154,20 +169,22 @@ class FeedCollectionIndexer(BaseIndexer):
                                                          'name'))
 
     @classmethod
-    def extract_document(cls, obj_id, obj=None):
+    def extract_document(cls, pk=None, obj=None):
         from mkt.feed.models import FeedCollection, FeedCollectionMembership
 
         if obj is None:
-            obj = cls.get_model().get(pk=obj_id)
+            obj = cls.get_model().objects.get(pk=pk)
 
         attach_trans_dict(cls.get_model(), [obj])
 
         doc = {
             'id': obj.id,
             'apps': list(obj.apps().values_list('id', flat=True)),
+            'background_color': obj.background_color,
+            'created': obj.created,
             'group_apps': {},  # Map of app IDs to index in group_names below.
             'group_names': [],  # List of ES-serialized group names.
-            'has_image': obj.has_image,
+            'image_hash': obj.image_hash,
             'item_type': feed.FEED_TYPE_COLL,
             'search_names': list(
                 set(string for _, string
@@ -185,8 +202,8 @@ class FeedCollectionIndexer(BaseIndexer):
                 if grp_translation not in doc['group_names']:
                     doc['group_names'].append(grp_translation)
 
-                doc['group_apps'][member.app_id] = doc['group_names'].index(
-                    grp_translation)
+                doc['group_apps'][member.app_id] = (
+                    doc['group_names'].index(grp_translation))
 
         # Handle localized fields.
         for field in ('description', 'name'):
@@ -210,15 +227,15 @@ class FeedShelfIndexer(BaseIndexer):
                 'properties': {
                     'id': {'type': 'long'},
                     'apps': {'type': 'long'},
-                    'background_color': {'type': 'string',
-                                         'index': 'not_analyzed'},
-                    'carrier': {'type': 'string', 'index': 'not_analyzed'},
-                    'has_image': {'type': 'boolean'},
-                    'item_type': {'type': 'string', 'index': 'not_analyzed'},
-                    'region': {'type': 'string', 'index': 'not_analyzed'},
+                    'background_color': cls.get_not_analyzed(),
+                    'carrier': cls.get_not_analyzed(),
+                    'created': {'type': 'date', 'format': 'dateOptionalTime'},
+                    'image_hash': cls.get_not_analyzed(),
+                    'item_type': cls.get_not_analyzed(),
+                    'region': cls.get_not_analyzed(),
                     'search_names': {'type': 'string',
                                      'analyzer': 'default_icu'},
-                    'slug': {'type': 'string'},
+                    'slug': get_slug_multifield(),
                 }
             }
         }
@@ -227,11 +244,11 @@ class FeedShelfIndexer(BaseIndexer):
                                                          'name'))
 
     @classmethod
-    def extract_document(cls, obj_id, obj=None):
+    def extract_document(cls, pk=None, obj=None):
         from mkt.feed.models import FeedShelf
 
         if obj is None:
-            obj = cls.get_model().get(pk=obj_id)
+            obj = cls.get_model().get(pk=pk)
 
         attach_trans_dict(cls.get_model(), [obj])
 
@@ -240,7 +257,8 @@ class FeedShelfIndexer(BaseIndexer):
             'apps': list(obj.apps().values_list('id', flat=True)),
             'background_color': obj.background_color,
             'carrier': mkt.carriers.CARRIER_CHOICE_DICT[obj.carrier].slug,
-            'has_image': obj.has_image,
+            'created': obj.created,
+            'image_hash': obj.image_hash,
             'item_type': feed.FEED_TYPE_SHELF,
             'region': mkt.regions.REGIONS_CHOICES_ID_DICT[obj.region].slug,
             'search_names': list(set(string for _, string
@@ -274,7 +292,8 @@ class FeedItemIndexer(BaseIndexer):
                     'carrier': {'type': 'integer'},
                     'category': {'type': 'integer'},
                     'collection': {'type': 'long'},
-                    'item_type': {'type': 'string', 'index': 'not_analyzed'},
+                    'item_type': cls.get_not_analyzed(),
+                    'order': {'type': 'integer'},
                     'region': {'type': 'integer'},
                     'shelf': {'type': 'long'},
                 }
@@ -282,11 +301,11 @@ class FeedItemIndexer(BaseIndexer):
         }
 
     @classmethod
-    def extract_document(cls, obj_id, obj=None):
+    def extract_document(cls, pk=None, obj=None):
         from mkt.feed.models import FeedItem
 
         if obj is None:
-            obj = cls.get_model().get(pk=obj_id)
+            obj = cls.get_model().objects.get(pk=pk)
 
         return {
             'id': obj.id,
@@ -299,6 +318,9 @@ class FeedItemIndexer(BaseIndexer):
             'collection': obj.collection_id if
                           obj.item_type == feed.FEED_TYPE_COLL else None,
             'item_type': obj.item_type,
+            # If no order, put it at end. Make sure order > 0 since we do a
+            # ES reciprocal modifier query.
+            'order': obj.order + 1 if obj.order is not None else 100,
             'region': obj.region,
             'shelf': obj.shelf_id if obj.item_type == feed.FEED_TYPE_SHELF
                      else None,

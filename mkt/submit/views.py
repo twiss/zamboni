@@ -26,7 +26,7 @@ from mkt.api.authorization import (AllowAppOwner, AllowRelatedAppOwner, AnyOf,
                                    GroupPermission)
 from mkt.api.base import CORSMixin, MarketplaceView
 from mkt.api.forms import NewPackagedForm, PreviewJSONForm
-from mkt.constants import DEVICE_LOOKUP
+from mkt.constants import PLATFORMS_NAMES
 from mkt.developers import tasks
 from mkt.developers.decorators import dev_required
 from mkt.developers.forms import (AppFormMedia, CategoryForm, NewManifestForm,
@@ -76,13 +76,12 @@ def proceed(request):
 @submit_step('terms')
 def terms(request):
     # If dev has already agreed, continue to next step.
-    if (getattr(request, 'amo_user', None) and
-            request.amo_user.read_dev_agreement):
+    if request.user.is_authenticated() and request.user.read_dev_agreement:
         return manifest(request)
 
     agreement_form = forms.DevAgreementForm(
         request.POST or {'read_dev_agreement': True},
-        instance=request.amo_user,
+        instance=request.user,
         request=request)
     if request.POST and agreement_form.is_valid():
         agreement_form.save()
@@ -133,7 +132,7 @@ def manifest(request):
                 # In this case there is no need to do any polling.
                 addon.update(icon_type='')
 
-            AddonUser(addon=addon, user=request.amo_user).save()
+            AddonUser(addon=addon, user=request.user).save()
             # Checking it once. Checking it twice.
             AppSubmissionChecklist.objects.create(addon=addon, terms=True,
                                                   manifest=True, details=False)
@@ -149,7 +148,7 @@ def manifest(request):
 
     return render(request, 'submit/manifest.html',
                   {'step': 'manifest', 'features_form': features_form,
-                   'form': form, 'DEVICE_LOOKUP': DEVICE_LOOKUP})
+                   'form': form, 'PLATFORMS_NAMES': PLATFORMS_NAMES})
 
 
 @dev_required
@@ -296,7 +295,7 @@ class ValidationViewSet(CORSMixin, mixins.CreateModelMixin,
 
         if not packaged:
             upload = FileUpload.objects.create(
-                user=getattr(request, 'amo_user', None))
+                user=request.user if request.user.is_authenticated() else None)
             # The hosted app validator is pretty fast.
             tasks.fetch_manifest(form.cleaned_data['manifest'], upload.pk)
         else:

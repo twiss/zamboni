@@ -8,6 +8,7 @@ from urlparse import urlparse
 from django.utils.functional import lazy
 
 import dj_database_url
+from mpconstants import mozilla_languages
 from heka.config import client_from_dict_config
 
 from mkt import asset_bundles
@@ -90,7 +91,6 @@ INSTALLED_APPS = (
     'csp',
     'jingo_minify',
     'lib.es',
-    'product_details',
     'tower',  # for ./manage.py extract
     'mkt.translations',
 
@@ -196,11 +196,14 @@ LOGGING = {
         'amqplib': {'handlers': ['null']},
         'caching.invalidation': {'handlers': ['null']},
         'caching': {'level': logging.WARNING},
+        'elasticsearch': {'level': logging.DEBUG},
+        # Set to DEBUG if you want pretty printed ES queries and responses.
+        'elasticsearch.trace': {'handlers': ['null']},
         'nose': {'level': logging.WARNING},
         's.client': {'level': logging.INFO},
         'suds': {'handlers': ['null']},
         'z.heka': {'level': logging.INFO},
-        'z.es': {'level': logging.INFO},
+        'z.elasticsearch': {'level': logging.INFO},
         'z.task': {'level': logging.INFO},
     },
 }
@@ -455,20 +458,13 @@ AMO_LANGUAGES = (
 )
 
 
-def lazy_langs(languages):
-    from product_details import product_details
-    if not product_details.languages:
-        return {}
-    # Here we have to ignore any language that exists in `languages` but not
-    # yet in `product_details.languages`, because otherwise we'll get an
-    # `IndexError`, causing `manage.py update_product_details` to fail
-    # during deployment.
-    return dict([(i.lower(), product_details.languages[i]['native'])
-                 for i in languages if i in product_details.languages])
+def langs(languages):
+    return dict([i.lower(), mozilla_languages.LANGUAGES[i]['native']]
+                 for i in languages if i in mozilla_languages.LANGUAGES)
 
 # Override Django's built-in with our native names, this is a Django setting
 # but we are putting it here because its being overridden.
-LANGUAGES = lazy(lazy_langs, dict)(AMO_LANGUAGES)
+LANGUAGES = lazy(langs, dict)(AMO_LANGUAGES)
 
 # The currently-recommended version of the API. Any requests to versions older
 # than this will include the `API-Status: Deprecated` header.
@@ -556,11 +552,12 @@ except ImportError:
     build_id = ""
 
 # Path to cleancss (our CSS minifier).
-CLEANCSS_BIN = path('node_modules/clean-css/bin/cleancss')
+CLEANCSS_BIN = os.environ.get('CLEANCSS_BIN',
+                              path('node_modules/clean-css/bin/cleancss'))
 
 # Name of our Commonplace repositories on GitHub.
 COMMONPLACE_REPOS = ['commbadge', 'fireplace', 'marketplace-stats',
-                     'rocketfuel', 'transonic']
+                     'rocketfuel', 'transonic', 'discoplace']
 COMMONPLACE_REPOS_APPCACHED = []
 
 # CSP Settings
@@ -686,7 +683,7 @@ ENGAGE_ROBOTS = True
 # replicas to zero.
 ES_DEFAULT_NUM_REPLICAS = 0
 ES_DEFAULT_NUM_SHARDS = 5
-ES_HOSTS = ['127.0.0.1:9200']
+ES_HOSTS = [os.environ.get('ES_HOST', '127.0.0.1:9200')]
 ES_INDEXES = {
     'webapp': 'apps',
     'mkt_feed_app': 'feed_apps',
@@ -956,7 +953,7 @@ PRE_GENERATE_APK_URL = (
 
 
 PREINSTALL_CONTACT_EMAIL = 'app-reviewers@mozilla.org'
-PREINSTALL_TEST_PLAN_URL = 'docs/app-test-template/v1'
+PREINSTALL_TEST_PLAN_URL = 'docs/app-test-template/v2'
 PREINSTALL_TEST_PLAN_PATH = os.path.join(
     MEDIA_ROOT, PREINSTALL_TEST_PLAN_URL + '/en-US.xlsx')
 PREINSTALL_TEST_PLAN_LATEST = datetime.datetime.fromtimestamp(
@@ -1017,9 +1014,8 @@ REST_FRAMEWORK = {
 
 RTL_LANGUAGES = ('ar', 'fa', 'fa-IR', 'he')
 
-# Until bug 753421 gets fixed, we're skipping ES tests. Sad times. I know.
-# Flip this on in your local settings to experience the joy of ES tests.
-RUN_ES_TESTS = False
+# Flip this on in your local settings to disable ES tests.
+RUN_ES_TESTS = True
 
 # If this is False, tasks and other jobs that send non-critical emails should
 # use a fake email backend.
@@ -1120,7 +1116,8 @@ STATSD_RECORD_KEYS = [
 STATSD_CLIENT = 'django_statsd.clients.normal'
 
 # Path to stylus (to compile .styl files).
-STYLUS_BIN = path('node_modules/stylus/bin/stylus')
+STYLUS_BIN = os.environ.get('STYLUS_BIN',
+                            path('node_modules/stylus/bin/stylus'))
 SYSLOG_TAG = "http_app_addons"
 SYSLOG_TAG2 = "http_app_addons2"
 
@@ -1146,7 +1143,8 @@ TOWER_KEYWORDS = {
 TOWER_ADD_HEADERS = True
 
 # Path to uglifyjs (our JS minifier).
-UGLIFY_BIN = path('node_modules/uglify-js/bin/uglifyjs')
+UGLIFY_BIN = os.environ.get('UGLIFY_BIN',
+                            path('node_modules/uglify-js/bin/uglifyjs'))
 
 # Feature flags
 UNLINK_SITE_STATS = True

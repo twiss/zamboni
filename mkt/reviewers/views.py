@@ -23,7 +23,7 @@ import commonware.log
 import jinja2
 import requests
 from cache_nuggets.lib import Token
-from elasticutils import F
+from elasticsearch_dsl.filter import F
 from rest_framework.exceptions import ParseError
 from rest_framework.generics import CreateAPIView, ListAPIView
 from rest_framework.response import Response
@@ -31,7 +31,6 @@ from tower import ugettext as _
 from waffle.decorators import waffle_switch
 
 import amo
-import mkt
 from amo.decorators import (any_permission_required, json_view, login_required,
                             permission_required)
 from amo.helpers import absolutify, urlparams
@@ -39,6 +38,9 @@ from amo.models import manual_order
 from amo.utils import (escape_all, HttpResponseSendFile, JSONEncoder, paginate,
                        redirect_for_login, smart_decode)
 from lib.crypto.packaged import SigningError
+
+import mkt
+import mkt.constants.comm as comm
 from mkt.abuse.models import AbuseReport
 from mkt.access import acl
 from mkt.api.authentication import (RestOAuthAuthentication,
@@ -46,6 +48,7 @@ from mkt.api.authentication import (RestOAuthAuthentication,
 from mkt.api.authorization import GroupPermission
 from mkt.api.base import SlugOrIdMixin
 from mkt.comm.forms import CommAttachmentFormSet
+from mkt.comm.utils import create_comm_note
 from mkt.constants import MANIFEST_CONTENT_TYPE
 from mkt.developers.models import ActivityLog, ActivityLogAttachment
 from mkt.files.models import File
@@ -60,7 +63,6 @@ from mkt.reviewers.serializers import (ReviewersESAppSerializer,
                                        ReviewingSerializer)
 from mkt.reviewers.utils import (AppsReviewing, clean_sort_param,
                                  device_queue_search)
-from mkt.search.utils import S
 from mkt.search.views import SearchView
 from mkt.site import messages
 from mkt.site.helpers import product_as_dict
@@ -80,6 +82,12 @@ from .models import CannedResponse
 
 QUEUE_PER_PAGE = 100
 log = commonware.log.getLogger('z.reviewers')
+
+
+def log_reviewer_action(addon, user, msg, action):
+    create_comm_note(addon, addon.current_version, user, msg,
+                     note_type=comm.ACTION_MAP(action.id))
+    amo.log(action, addon, addon.current_version, details={'comments': msg})
 
 
 def reviewer_required(region=None):
@@ -273,7 +281,7 @@ def _review(request, addon, version):
 
     if (not settings.ALLOW_SELF_REVIEWS and
         not acl.action_allowed(request, 'Admin', '%') and
-        addon.has_author(request.amo_user)):
+        addon.has_author(request.user)):
         messages.warning(request, _('Self-reviews are not allowed.'))
         return redirect(reverse('reviewers.home'))
 
@@ -337,8 +345,9 @@ def _review(request, addon, version):
                     [_(u'Removed {0}').format(
                      unicode(amo.DEVICE_TYPES[d].name))
                      for d in removed_devices]))
-                amo.log(amo.LOG.REVIEW_DEVICE_OVERRIDE, addon,
-                        addon.current_version, details={'comments': msg})
+
+                log_reviewer_action(addon, request.user, msg,
+                                    amo.LOG.REVIEW_DEVICE_OVERRIDE)
 
             if old_features != new_features:
                 # The reviewer overrode the requirements. We need to not
@@ -357,14 +366,15 @@ def _review(request, addon, version):
                       [_(u'Removed {0}').format(f) for f in removed_features])
                 # L10n: {0} is the list of requirements changes.
                 msg = _(u'Requirements changed by reviewer: {0}').format(fmt)
-                amo.log(amo.LOG.REVIEW_FEATURES_OVERRIDE, addon,
-                        addon.current_version, details={'comments': msg})
+
+                log_reviewer_action(addon, request.user, msg,
+                                    amo.LOG.REVIEW_FEATURES_OVERRIDE)
 
         score = form.helper.process()
 
         if form.cleaned_data.get('notify'):
             # TODO: bug 741679 for implementing notifications in Marketplace.
-            EditorSubscription.objects.get_or_create(user=request.amo_user,
+            EditorSubscription.objects.get_or_create(user=request.user,
                                                      addon=addon)
 
         is_tarako = form.cleaned_data.get('is_tarako', False)
@@ -375,14 +385,14 @@ def _review(request, addon, version):
 
         # Success message.
         if score:
-            score = ReviewerScore.objects.filter(user=request.amo_user)[0]
+            score = ReviewerScore.objects.filter(user=request.user)[0]
             # L10N: {0} is the type of review. {1} is the points they earned.
             #       {2} is the points they now have total.
             success = _(
                u'"{0}" successfully processed (+{1} points, {2} total).'
                 .format(unicode(amo.REVIEWED_CHOICES[score.note_key]),
                         score.score,
-                        ReviewerScore.get_total(request.amo_user)))
+                        ReviewerScore.get_total(request.user)))
         else:
             success = _('Review successfully processed.')
         messages.success(request, success)
@@ -936,14 +946,14 @@ def performance(request, username=None):
     is_admin = acl.action_allowed(request, 'Admin', '%')
 
     if username:
-        if username == request.amo_user.username:
-            user = request.amo_user
+        if username == request.user.username:
+            user = request.user
         elif is_admin:
             user = get_object_or_404(UserProfile, username=username)
         else:
             raise http.Http404
     else:
-        user = request.amo_user
+        user = request.user
 
     today = datetime.date.today()
     month_ago = today - datetime.timedelta(days=30)
@@ -1086,10 +1096,9 @@ class ReviewersSearchView(SearchView):
     def search(self, request):
         form_data = self.get_search_data(request)
         query = form_data.get('q', '')
-        base_filters = {'type': form_data['type']}
+        qs = WebappIndexer.search()
         if form_data.get('status') != 'any':
-            base_filters['status'] = form_data.get('status')
-        qs = S(WebappIndexer).filter(**base_filters)
+            qs = qs.filter('term', status=form_data.get('status'))
         qs = self.apply_filters(request, qs, data=form_data)
         qs = apply_reviewer_filters(request, qs, data=form_data)
         page = self.paginate_queryset(qs)
@@ -1098,18 +1107,16 @@ class ReviewersSearchView(SearchView):
 
 def apply_reviewer_filters(request, qs, data=None):
     for k in ('has_info_request', 'has_editor_comment'):
-        if data.get(k, None) is not None:
-            qs = qs.filter(**{
-                'latest_version.%s' % k: data[k]
-            })
-    if data.get('is_escalated', None) is not None:
-        qs = qs.filter(is_escalated=data['is_escalated'])
+        if data.get(k) is not None:
+            qs = qs.filter('term', **{'latest_version.%s' % k: data[k]})
+    if data.get('is_escalated') is not None:
+        qs = qs.filter('term', is_escalated=data['is_escalated'])
     is_tarako = data.get('is_tarako')
     if is_tarako is not None:
         if is_tarako:
-            qs = qs.filter(tags='tarako')
+            qs = qs.filter('term', tags='tarako')
         else:
-            qs = qs.filter(~F(tags='tarako'))
+            qs = qs.filter(~F('term', tags='tarako'))
     return qs
 
 
@@ -1161,7 +1168,7 @@ class GenerateToken(SlugOrIdMixin, CreateAPIView):
         token.save()
 
         log.info('Generated token on app:%s for user:%s' % (
-            app.id, request.amo_user.id))
+            app.id, request.user.id))
 
         return Response({'token': token.token})
 
@@ -1184,7 +1191,7 @@ def review_viewing(request):
         return {}
 
     addon_id = request.POST['addon_id']
-    user_id = request.amo_user.id
+    user_id = request.user.id
     current_name = ''
     is_user = 0
     key = '%s:review_viewing:%s' % (settings.CACHE_PREFIX, addon_id)
@@ -1199,7 +1206,7 @@ def review_viewing(request):
         # just to account for latency and the like.
         cache.set(key, user_id, interval * 2)
         currently_viewing = user_id
-        current_name = request.amo_user.name
+        current_name = request.user.name
         is_user = 1
     else:
         current_name = UserProfile.objects.get(pk=currently_viewing).name
@@ -1218,7 +1225,7 @@ def queue_viewing(request):
         return {}
 
     viewing = {}
-    user_id = request.amo_user.id
+    user_id = request.user.id
 
     for addon_id in request.POST['addon_ids'].split(','):
         addon_id = addon_id.strip()

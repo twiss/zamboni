@@ -17,7 +17,7 @@ import amo.tests
 import mkt
 from amo.tests import formset, initial
 from amo.tests.test_helpers import get_image_path
-from constants.applications import DEVICE_TYPES
+from mkt.constants.applications import DEVICE_TYPES
 from mkt.files.tests.test_models import UploadTest as BaseUploadTest
 from mkt.reviewers.models import EscalationQueue
 from mkt.site.fixtures import fixture
@@ -160,7 +160,7 @@ class TestTerms(TestSubmit):
         f = mock.Mock()
         f.__name__ = 'function'
         request = mock.Mock()
-        request.amo_user.read_dev_agreement = None
+        request.user.read_dev_agreement = None
         request.get_full_path.return_value = self.url
         func = read_dev_agreement_required(f)
         res = func(request)

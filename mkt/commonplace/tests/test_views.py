@@ -2,7 +2,7 @@ from django.conf import settings
 
 import mock
 from nose import SkipTest
-from nose.tools import eq_
+from nose.tools import eq_, ok_
 
 import amo.tests
 from amo.utils import reverse
@@ -14,27 +14,49 @@ class TestCommonplace(amo.tests.TestCase):
         res = self.client.get('/server.html')
         self.assertTemplateUsed(res, 'commonplace/index.html')
         self.assertEquals(res.context['repo'], 'fireplace')
+        self.assertContains(res, 'splash.css')
+        self.assertContains(res, 'login.persona.org/include.js')
 
     def test_commbadge(self):
         res = self.client.get('/comm/')
         self.assertTemplateUsed(res, 'commonplace/index.html')
         self.assertEquals(res.context['repo'], 'commbadge')
+        self.assertNotContains(res, 'splash.css')
+        self.assertContains(res, 'login.persona.org/include.js')
 
     def test_rocketfuel(self):
         res = self.client.get('/curation/')
         self.assertTemplateUsed(res, 'commonplace/index.html')
         self.assertEquals(res.context['repo'], 'rocketfuel')
+        self.assertNotContains(res, 'splash.css')
+        self.assertContains(res, 'login.persona.org/include.js')
 
     def test_transonic(self):
         res = self.client.get('/curate/')
         self.assertTemplateUsed(res, 'commonplace/index.html')
         self.assertEquals(res.context['repo'], 'transonic')
+        self.assertNotContains(res, 'splash.css')
+        self.assertContains(res, 'login.persona.org/include.js')
+
+    def test_discoplace(self):
+        res = self.client.get('/discovery/')
+        self.assertTemplateUsed(res, 'commonplace/index.html')
+        self.assertEquals(res.context['repo'], 'discoplace')
+        self.assertContains(res, 'splash.css')
+        self.assertNotContains(res, 'login.persona.org/include.js')
 
     def test_fireplace_persona_js_not_included_on_firefox_os(self):
-        # Temporarily enabling include.js shim (bug 992334).
-        raise SkipTest
-
         for url in ('/server.html?mccs=blah',
+                    '/server.html?mcc=blah&mnc=blah',
+                    '/server.html?nativepersona=true'):
+            res = self.client.get(url)
+            self.assertNotContains(res, 'login.persona.org/include.js')
+
+    def test_fireplace_persona_js_not_included_for_firefox_accounts(self):
+        self.create_switch('firefox-accounts')
+        for url in ('/server.html',
+                    '/server.html?mcc=blah',
+                    '/server.html?mccs=blah',
                     '/server.html?mcc=blah&mnc=blah',
                     '/server.html?nativepersona=true'):
             res = self.client.get(url)

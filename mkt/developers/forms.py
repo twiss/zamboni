@@ -8,6 +8,7 @@ from zipfile import ZipFile
 from django import forms
 from django.conf import settings
 from django.core.validators import URLValidator
+from django.forms import widgets
 from django.forms.extras.widgets import SelectDateWidget
 from django.forms.models import modelformset_factory
 from django.template.defaultfilters import filesizeformat
@@ -16,7 +17,7 @@ import commonware
 import happyforms
 import waffle
 from jinja2 import escape as jinja2_escape
-from product_details import product_details
+from mpconstants import regions as mpconstants_regions
 from quieter_formset.formset import BaseModelFormSet
 from tower import ugettext as _, ugettext_lazy as _lazy, ungettext as ngettext
 
@@ -898,7 +899,7 @@ class CategoryForm(happyforms.Form):
         self.product = kw.pop('product', None)
         super(CategoryForm, self).__init__(*args, **kw)
 
-        self.cats_before = (list(self.product.categories) 
+        self.cats_before = (list(self.product.categories)
                             if self.product.categories else [])
 
         self.initial['categories'] = self.cats_before
@@ -959,7 +960,7 @@ class DevNewsletterForm(happyforms.Form):
     country = forms.ChoiceField(label=_lazy(u'Country'))
 
     def __init__(self, locale, *args, **kw):
-        regions = product_details.get_regions(locale)
+        regions = mpconstants_regions.get_region(locale).REGIONS
         regions = sorted(regions.iteritems(), key=lambda x: x[1])
 
         super(DevNewsletterForm, self).__init__(*args, **kw)
@@ -1012,13 +1013,22 @@ class TransactionFilterForm(happyforms.Form):
 
 
 class APIConsumerForm(happyforms.ModelForm):
-    app_name = forms.CharField(required=True)
-    redirect_uri = forms.CharField(validators=[URLValidator()],
-                                   required=True)
+    app_name = forms.CharField(required=False)
+    oauth_leg = forms.ChoiceField(choices=(
+        ('website', _lazy('Web site')),
+        ('command', _lazy('Command line')))
+    )
+    redirect_uri = forms.CharField(validators=[URLValidator()], required=False)
 
     class Meta:
         model = Access
         fields = ('app_name', 'redirect_uri')
+
+    def __init__(self, *args, **kwargs):
+        super(APIConsumerForm, self).__init__(*args, **kwargs)
+        if self.data.get('oauth_leg') == 'website':
+            for field in ['app_name', 'redirect_uri']:
+                self.fields[field].required = True
 
 
 class AppVersionForm(happyforms.ModelForm):
@@ -1176,3 +1186,7 @@ class IARCGetAppInfoForm(happyforms.Form):
 
 class ContentRatingForm(happyforms.Form):
     since = forms.DateTimeField()
+
+
+class MOTDForm(happyforms.Form):
+    motd = forms.CharField(widget=widgets.Textarea())
