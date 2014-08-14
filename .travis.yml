@@ -18,9 +18,3 @@ install:
 before_script:
   - mysql -e 'create database zamboni;'
 script: ./manage.py test lib mkt --noinput -s --logging-clear-handlers --with-blockage --with-nicedots
-notifications:
-  irc:
-    channels:
-      - "irc.mozilla.org#amo-bots"
-    on_success: change
-    on_failure: always
